@@ -79,7 +79,7 @@ class EvaluationService:
                 reasons.append(f"句子{i+1}: 未找到依据 - '{sentence[:50]}...'")
 
         faithfulness = supported_sentences / len([s for s in answer_sentences if len(s.strip()) >= 5]) if answer_sentences else 0.0
-        faithfulness = round(faithfulness * 100, 1)
+        faithfulness = round(faithfulness, 3)
 
         reason_summary = f"共{len(answer_sentences)}个句子，{supported_sentences}个找到依据。\n" + "\n".join(reasons[:5])
         if len(reasons) > 5:

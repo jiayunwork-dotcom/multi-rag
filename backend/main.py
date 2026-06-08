@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import engine, Base
-from app.middleware import LoggingMiddleware, CORSMiddleware as CustomCORSMiddleware
+from app.middleware import AuthMiddleware, LoggingMiddleware, CORSMiddleware as CustomCORSMiddleware
 from app.routers import kb_router, doc_router, chat_router, admin_router
 from app.services.pipeline_service import service_manager
 
@@ -74,6 +74,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.add_middleware(AuthMiddleware)
 app.add_middleware(LoggingMiddleware)
 
 app.add_middleware(

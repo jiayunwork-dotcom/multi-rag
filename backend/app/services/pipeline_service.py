@@ -12,6 +12,9 @@ from .chunking_service import ChunkingService
 from .embedding_service import EmbeddingService
 from .vector_store import VectorStore
 from .bm25_index import BM25Index
+from .retrieval_service import RetrievalService
+from .evaluation_service import EvaluationService
+from .llm_service import LLMService
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -309,8 +312,6 @@ class ServiceManager:
 
         self.bm25_index = BM25Index()
 
-        from .retrieval_service import RetrievalService
-        from .evaluation_service import EvaluationService
         self.retrieval_service = RetrievalService(
             self.vector_store,
             self.bm25_index,
@@ -318,7 +319,6 @@ class ServiceManager:
             rrf_k=settings.RRF_K
         )
 
-        from .llm_service import LLMService
         self.llm_service = LLMService(
             endpoint=settings.LLM_ENDPOINT,
             api_key=settings.LLM_API_KEY,

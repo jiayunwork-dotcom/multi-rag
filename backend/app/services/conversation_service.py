@@ -33,12 +33,22 @@ class ConversationService:
 
         messages = list(reversed(messages))
 
-        if len(messages) > max_rounds * 2 and conversation.history_summary:
-            return self._build_history_with_summary(
-                messages,
-                conversation.history_summary,
-                max_rounds
-            )
+        if len(messages) >= max_rounds * 2:
+            if conversation.history_summary:
+                return self._build_history_with_summary(
+                    messages,
+                    conversation.history_summary,
+                    max_rounds
+                )
+            else:
+                recent_messages = messages[-(max_rounds * 2):]
+                history = []
+                for msg in recent_messages:
+                    history.append({
+                        "role": msg.role,
+                        "content": msg.content
+                    })
+                return history
 
         history = []
         for msg in messages:
