@@ -199,7 +199,7 @@ def get_chat_history(
 
 @router.post("")
 async def chat(
-    request: schemas.ChatRequest,
+    request: schemas.ChatGraphRequest,
     db: Session = Depends(get_db)
 ):
     start_time = time.time()
@@ -269,12 +269,49 @@ async def chat(
         if doc:
             result["document_title"] = doc.title
 
+    graph_results = None
+    graph_debug = None
+    graph_citations = []
+    combined_context = ""
+
+    if request.use_graph and settings.GRAPH_ENABLED and service_manager.graph_query_service:
+        try:
+            graph_request = schemas.GraphQueryRequest(
+                question=request.question,
+                knowledge_base_id=knowledge_base_id,
+                max_hops=request.graph_max_hops
+            )
+            graph_results, graph_debug = service_manager.graph_query_service.query_graph(db, graph_request)
+
+            if graph_results and graph_results.graph_context:
+                graph_citations = [
+                    {
+                        "type": "graph",
+                        "entity": ent.name,
+                        "entity_type": ent.entity_type,
+                        "occurrence_count": ent.occurrence_count
+                    }
+                    for ent in graph_results.related_entities[:10]
+                ]
+
+        except Exception as e:
+            logger.warning(f"Graph query failed: {e}")
+
     context, citations = service_manager.llm_service.build_context(retrieval_results)
 
-    messages = service_manager.llm_service.build_prompt(
+    if graph_results and graph_results.graph_context:
+        combined_context = service_manager.llm_service.build_graph_rag_context(
+            retrieval_context=context,
+            graph_context=graph_results.graph_context
+        )
+    else:
+        combined_context = context
+
+    messages = service_manager.llm_service.build_graph_rag_prompt(
         question=request.question,
-        context=context,
+        context=combined_context,
         conversation_history=conversation_history,
+        use_graph=request.use_graph
     )
 
     if request.stream:
@@ -283,11 +320,14 @@ async def chat(
                 messages=messages,
                 question=request.question,
                 context_chunks=retrieval_results,
-                citations=citations,
+                citations=citations + graph_citations,
                 retrieval_debug=retrieval_debug,
                 conversation_id=conv.id,
                 db=db,
                 start_time=start_time,
+                graph_results=graph_results,
+                graph_debug=graph_debug,
+                use_graph=request.use_graph,
             ),
             media_type="text/event-stream",
         )
@@ -296,6 +336,9 @@ async def chat(
         answer = response.choices[0].message.content
 
         formatted = service_manager.llm_service.format_answer_with_citations(answer, citations)
+
+        if request.use_graph and graph_results:
+            formatted = service_manager.llm_service.format_answer_with_graph_markers(formatted)
 
         retrieval_scores = [r.get("rerank_score") or r.get("rrf_score") or 0 for r in retrieval_results]
         evaluation = service_manager.evaluation_service.evaluate(
@@ -307,12 +350,16 @@ async def chat(
 
         response_time = time.time() - start_time
 
+        debug_info = retrieval_debug
+        if graph_debug:
+            debug_info["graph_query"] = graph_debug.model_dump()
+
         assistant_message = models.Message(
             conversation_id=conv.id,
             role="assistant",
             content=formatted["answer"],
-            citations=formatted["citations"],
-            retrieval_debug=retrieval_debug,
+            citations=formatted["citations"] + graph_citations,
+            retrieval_debug=debug_info,
             evaluation=evaluation,
             response_time=response_time,
         )
@@ -336,13 +383,16 @@ async def chat(
                 rerank_score=r.get("rerank_score"),
             ))
 
-        return schemas.ChatResponse(
+        return schemas.ChatGraphResponse(
             answer=formatted["answer"],
             conversation_id=conv.id,
-            citations=formatted["citations"],
+            citations=formatted["citations"] + graph_citations,
             retrieval_results=formatted_results,
-            retrieval_debug=retrieval_debug,
+            retrieval_debug=debug_info,
             evaluation=evaluation,
+            graph_results=graph_results,
+            graph_debug=graph_debug,
+            graph_citations=graph_citations,
         )
 
 
@@ -355,6 +405,9 @@ async def stream_chat_response(
     conversation_id: int,
     db: Session,
     start_time: float,
+    graph_results=None,
+    graph_debug=None,
+    use_graph=False,
 ):
     full_answer = ""
 
@@ -366,6 +419,9 @@ async def stream_chat_response(
 
     formatted = service_manager.llm_service.format_answer_with_citations(full_answer, citations)
 
+    if use_graph and graph_results:
+        formatted = service_manager.llm_service.format_answer_with_graph_markers(formatted)
+
     retrieval_scores = [r.get("rerank_score") or r.get("rrf_score") or 0 for r in context_chunks]
     evaluation = service_manager.evaluation_service.evaluate(
         question=question,
@@ -376,12 +432,16 @@ async def stream_chat_response(
 
     response_time = time.time() - start_time
 
+    debug_info = retrieval_debug
+    if graph_debug:
+        debug_info["graph_query"] = graph_debug.model_dump()
+
     assistant_message = models.Message(
         conversation_id=conversation_id,
         role="assistant",
         content=formatted["answer"],
         citations=formatted["citations"],
-        retrieval_debug=retrieval_debug,
+        retrieval_debug=debug_info,
         evaluation=evaluation,
         response_time=response_time,
     )
@@ -393,7 +453,9 @@ async def stream_chat_response(
 
     yield f"data: {json.dumps({'type': 'citations', 'citations': formatted['citations']})}\n\n"
     yield f"data: {json.dumps({'type': 'evaluation', 'evaluation': evaluation})}\n\n"
-    yield f"data: {json.dumps({'type': 'debug', 'retrieval_debug': retrieval_debug})}\n\n"
+    yield f"data: {json.dumps({'type': 'debug', 'retrieval_debug': debug_info})}\n\n"
+    if graph_results:
+        yield f"data: {json.dumps({'type': 'graph_results', 'graph_results': graph_results.model_dump(), 'graph_debug': graph_debug.model_dump() if graph_debug else None})}\n\n"
     yield f"data: {json.dumps({'type': 'done', 'response_time': response_time})}\n\n"
 
 

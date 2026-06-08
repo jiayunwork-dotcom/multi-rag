@@ -18,6 +18,30 @@ class ChunkStrategy(str, enum.Enum):
     SEMANTIC = "semantic"
 
 
+class EntityType(str, enum.Enum):
+    PERSON = "person"
+    ORGANIZATION = "organization"
+    LOCATION = "location"
+    TECH_CONCEPT = "tech_concept"
+    EVENT = "event"
+
+
+class RelationType(str, enum.Enum):
+    BELONGS_TO = "belongs_to"
+    LOCATED_IN = "located_in"
+    CREATED_BY = "created_by"
+    USES = "uses"
+    DEPENDS_ON = "depends_on"
+    CONTAINS = "contains"
+
+
+class GraphBuildStatus(str, enum.Enum):
+    PENDING = "pending"
+    BUILDING = "building"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
 
@@ -141,4 +165,91 @@ class SystemStats(Base):
     id = Column(Integer, primary_key=True, index=True)
     stat_key = Column(String(100), unique=True, nullable=False)
     stat_value = Column(JSON, nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class GraphEntity(Base):
+    __tablename__ = "graph_entities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    entity_type = Column(String(50), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    neo4j_id = Column(String(100), nullable=True, index=True)
+    embedding = Column(JSON, nullable=True)
+    metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    occurrences = relationship("EntityOccurrence", back_populates="entity", cascade="all, delete-orphan")
+    source_relations = relationship("GraphRelation", foreign_keys="GraphRelation.source_entity_id", back_populates="source_entity")
+    target_relations = relationship("GraphRelation", foreign_keys="GraphRelation.target_entity_id", back_populates="target_entity")
+
+
+class GraphRelation(Base):
+    __tablename__ = "graph_relations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    source_entity_id = Column(Integer, ForeignKey("graph_entities.id"), nullable=False, index=True)
+    target_entity_id = Column(Integer, ForeignKey("graph_entities.id"), nullable=False, index=True)
+    relation_type = Column(String(50), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    neo4j_id = Column(String(100), nullable=True, index=True)
+    frequency = Column(Integer, default=1)
+    metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    source_entity = relationship("GraphEntity", foreign_keys=[source_entity_id], back_populates="source_relations")
+    target_entity = relationship("GraphEntity", foreign_keys=[target_entity_id], back_populates="target_relations")
+    occurrences = relationship("RelationOccurrence", back_populates="relation", cascade="all, delete-orphan")
+
+
+class EntityOccurrence(Base):
+    __tablename__ = "entity_occurrences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_id = Column(Integer, ForeignKey("graph_entities.id"), nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
+    chunk_id = Column(Integer, ForeignKey("chunks.id"), nullable=False, index=True)
+    context_snippet = Column(Text, nullable=True)
+    start_pos = Column(Integer, nullable=True)
+    end_pos = Column(Integer, nullable=True)
+    confidence = Column(Float, default=1.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    entity = relationship("GraphEntity", back_populates="occurrences")
+
+
+class RelationOccurrence(Base):
+    __tablename__ = "relation_occurrences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    relation_id = Column(Integer, ForeignKey("graph_relations.id"), nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
+    chunk_id = Column(Integer, ForeignKey("chunks.id"), nullable=False, index=True)
+    context_snippet = Column(Text, nullable=True)
+    confidence = Column(Float, default=1.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    relation = relationship("GraphRelation", back_populates="occurrences")
+
+
+class KnowledgeBaseGraphStats(Base):
+    __tablename__ = "kb_graph_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, unique=True, index=True)
+    entity_count = Column(Integer, default=0)
+    relation_count = Column(Integer, default=0)
+    connected_components = Column(Integer, default=0)
+    avg_degree = Column(Float, default=0.0)
+    max_degree = Column(Integer, default=0)
+    community_count = Column(Integer, default=0)
+    build_status = Column(String(50), default=GraphBuildStatus.PENDING)
+    build_progress = Column(Float, default=0.0)
+    build_error = Column(Text, nullable=True)
+    last_built_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

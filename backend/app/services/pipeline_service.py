@@ -15,6 +15,8 @@ from .bm25_index import BM25Index
 from .retrieval_service import RetrievalService
 from .evaluation_service import EvaluationService
 from .llm_service import LLMService
+from .graph_service import GraphService
+from .graph_query_service import GraphQueryService
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -27,13 +29,15 @@ class DocumentPipeline:
         chunking_service: ChunkingService,
         embedding_service: EmbeddingService,
         vector_store: VectorStore,
-        bm25_index: BM25Index
+        bm25_index: BM25Index,
+        graph_service: Optional[GraphService] = None
     ):
         self.document_parser = document_parser
         self.chunking_service = chunking_service
         self.embedding_service = embedding_service
         self.vector_store = vector_store
         self.bm25_index = bm25_index
+        self.graph_service = graph_service
         self.active_tasks = {}
 
     async def process_document(
@@ -169,6 +173,21 @@ class DocumentPipeline:
 
             db.commit()
 
+            if settings.GRAPH_ENABLED and settings.GRAPH_AUTO_BUILD and self.graph_service:
+                try:
+                    await self._update_progress(db, parse_task, 95, "正在构建知识图谱...", models.ParseStatus.COMPLETED)
+                    await asyncio.to_thread(
+                        self.graph_service.build_graph_for_document,
+                        db,
+                        document,
+                        rebuild=False
+                    )
+                    logger.info(f"Graph built for document {document_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to build graph for document {document_id}: {e}")
+
+            db.commit()
+
             if progress_callback:
                 await progress_callback({
                     "task_id": parse_task.id,
@@ -270,6 +289,13 @@ class DocumentPipeline:
             chunk_ids
         )
 
+        if settings.GRAPH_ENABLED and self.graph_service:
+            try:
+                self.graph_service.clear_document_graph(db, document_id)
+                logger.info(f"Deleted graph data for document {document_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete graph data for document {document_id}: {e}")
+
         logger.info(f"Deleted index data for document {document_id}: {len(embedding_ids)} embeddings, {len(chunk_ids)} chunks")
 
 
@@ -285,6 +311,8 @@ class ServiceManager:
         self.retrieval_service = None
         self.llm_service = None
         self.evaluation_service = None
+        self.graph_service = None
+        self.graph_query_service = None
         self.pipeline = None
         self._initialized = False
 
@@ -345,12 +373,29 @@ class ServiceManager:
 
         self.evaluation_service = EvaluationService(self.embedding_service)
 
+        if settings.GRAPH_ENABLED:
+            try:
+                self.graph_service = GraphService(
+                    self.embedding_service,
+                    self.llm_service
+                )
+                self.graph_query_service = GraphQueryService(
+                    self.embedding_service,
+                    self.llm_service
+                )
+                logger.info("Graph services initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize graph services: {e}")
+                self.graph_service = None
+                self.graph_query_service = None
+
         self.pipeline = DocumentPipeline(
             self.document_parser,
             self.chunking_service,
             self.embedding_service,
             self.vector_store,
-            self.bm25_index
+            self.bm25_index,
+            self.graph_service
         )
 
         self._initialized = True

@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MODELS_DIR: str = "models"
 
+    NEO4J_HOST: str = "localhost"
+    NEO4J_PORT: int = 7687
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "raggraphpass"
+    NEO4J_DATABASE: str = "neo4j"
+
     LLM_ENDPOINT: str = "http://localhost:11434/v1"
     LLM_API_KEY: str = "ollama"
     LLM_MODEL: str = "qwen2.5"
@@ -35,6 +41,14 @@ class Settings(BaseSettings):
 
     MAX_BATCH_UPLOAD: int = 20
     MAX_FILE_SIZE_MB: int = 50
+
+    GRAPH_ENABLED: bool = True
+    GRAPH_AUTO_BUILD: bool = True
+    GRAPH_ENTITY_DISAMBIGUATION_THRESHOLD: float = 0.85
+    GRAPH_MAX_NODES_VISUALIZATION: int = 200
+    GRAPH_COMMUNITY_THRESHOLD: int = 5
+    GRAPH_MAX_HOPS: int = 2
+    GRAPH_MAX_RELATED_ENTITIES: int = 20
 
     PROMPT_TEMPLATE: str = """基于以下参考资料回答用户问题，如果参考资料中没有相关信息请说明无法回答。
 参考资料:

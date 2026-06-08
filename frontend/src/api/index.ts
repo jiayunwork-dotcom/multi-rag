@@ -3,7 +3,11 @@ import type {
   KnowledgeBase, Document, ParseTask, Conversation, Message,
   ChatResponse, ChatRequest, SystemConfig, UsageStats, Chunk,
   CompareRequest, CompareChatResponse, VisualizationResponse,
-  ABCompareRequest, ABCompareResponse
+  ABCompareRequest, ABCompareResponse,
+  GraphStats, GraphData, GraphEntity, GraphEntityDetail, GraphRelation,
+  GraphEntityCreate, GraphEntityUpdate, GraphRelationCreate, GraphRelationUpdate,
+  GraphBuildRequest, GraphBuildProgress, GraphQueryRequest, GraphQueryResult, GraphQueryDebug,
+  ChatGraphRequest, ChatGraphResponse
 } from '@/types'
 
 export const knowledgeBaseApi = {
@@ -65,9 +69,9 @@ export const chatApi = {
     api.delete(`/chat/conversations/${convId}/messages/${msgId}`),
   getHistory: (conversationId?: number) =>
     api.get<Message[]>('/chat/history', { params: { conversation_id: conversationId } }),
-  sendMessage: (data: ChatRequest) =>
-    api.post<ChatResponse>('/chat', data),
-  sendMessageStream: (data: ChatRequest) => {
+  sendMessage: (data: ChatGraphRequest) =>
+    api.post<ChatGraphResponse>('/chat', data),
+  sendMessageStream: (data: ChatGraphRequest) => {
     const token = localStorage.getItem('api_token') || 'rag-token-secret'
     return fetch('/api/chat', {
       method: 'POST',
@@ -84,6 +88,41 @@ export const chatApi = {
     api.post<VisualizationResponse>('/chat/visualization', data),
   sendABCompare: (data: ABCompareRequest) =>
     api.post<ABCompareResponse>('/chat/ab-compare', data)
+}
+
+export const graphApi = {
+  getStats: (kbId: number) =>
+    api.get<GraphStats>(`/knowledge-graph/${kbId}/stats`),
+  getGraphData: (kbId: number, params?: { filter_entity_types?: string[]; limit?: number }) =>
+    api.get<GraphData>(`/knowledge-graph/${kbId}/graph-data`, { params }),
+  getEntityDetail: (entityId: number) =>
+    api.get<GraphEntityDetail>(`/knowledge-graph/entities/${entityId}`),
+  listEntities: (kbId: number, params?: { entity_type?: string; skip?: number; limit?: number }) =>
+    api.get<GraphEntity[]>(`/knowledge-graph/${kbId}/entities`, { params }),
+  listRelations: (kbId: number, params?: { relation_type?: string; skip?: number; limit?: number }) =>
+    api.get<GraphRelation[]>(`/knowledge-graph/${kbId}/relations`, { params }),
+  createEntity: (data: GraphEntityCreate) =>
+    api.post<GraphEntity>('/knowledge-graph/entities', data),
+  updateEntity: (entityId: number, data: GraphEntityUpdate) =>
+    api.put<GraphEntity>(`/knowledge-graph/entities/${entityId}`, data),
+  deleteEntity: (entityId: number) =>
+    api.delete(`/knowledge-graph/entities/${entityId}`),
+  createRelation: (data: GraphRelationCreate) =>
+    api.post<GraphRelation>('/knowledge-graph/relations', data),
+  updateRelation: (relationId: number, data: GraphRelationUpdate) =>
+    api.put<GraphRelation>(`/knowledge-graph/relations/${relationId}`, data),
+  deleteRelation: (relationId: number) =>
+    api.delete(`/knowledge-graph/relations/${relationId}`),
+  buildGraph: (data: GraphBuildRequest) =>
+    api.post<GraphBuildProgress>('/knowledge-graph/build', data),
+  getBuildProgress: (kbId: number) =>
+    api.get<GraphBuildProgress>(`/knowledge-graph/${kbId}/build-progress`),
+  queryGraph: (data: GraphQueryRequest) =>
+    api.post<{ result: GraphQueryResult; debug: GraphQueryDebug }>('/knowledge-graph/query', data),
+  exportGraph: (kbId: number) =>
+    api.get(`/knowledge-graph/${kbId}/export`, { responseType: 'blob' }),
+  clearGraph: (kbId: number) =>
+    api.delete(`/knowledge-graph/${kbId}/clear`)
 }
 
 export const adminApi = {

@@ -334,3 +334,131 @@ class LLMService:
             "viewpoints": viewpoints,
             "summary": "对比分析完成"
         }
+
+    def build_graph_rag_context(
+        self,
+        retrieval_context: str,
+        graph_context: str
+    ) -> str:
+        combined_parts = []
+
+        if retrieval_context:
+            combined_parts.append("## 文档检索信息")
+            combined_parts.append(retrieval_context)
+
+        if graph_context:
+            combined_parts.append("\n" + graph_context)
+
+        return "\n".join(combined_parts)
+
+    def build_graph_rag_prompt(
+        self,
+        question: str,
+        context: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        use_graph: bool = False
+    ) -> List[Dict[str, str]]:
+        messages = []
+
+        if conversation_history:
+            for msg in conversation_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+
+        if use_graph:
+            system_prompt = """你是一个专业的知识图谱增强问答助手，能够基于文档检索和知识图谱两种信息源回答用户问题。
+
+请严格遵循以下规则：
+1. 区分信息来源：来自知识图谱推理的信息用 🟦 标记，来自文档原文检索的信息用 🟨 标记
+2. 只使用提供的信息，不要编造或推测
+3. 如果信息不足，明确说明"根据现有资料无法回答该问题"
+4. 每个答案段落结束时，使用[1][2]等格式标注引用来源
+5. 对于图谱推理的结论，要清晰说明推理路径（如"根据[实体A]--[关系]-->[实体B]的关联..."）
+6. 优先使用文档原文信息，图谱信息作为补充和推理依据
+7. 回答要清晰、有条理，重要信息可以适当强调
+
+信息标记说明：
+- 🟦 表示该信息来自知识图谱的关联推理
+- 🟨 表示该信息直接来自文档原文检索
+- 🟩 表示该信息结合了文档和图谱的综合分析"""
+        else:
+            system_prompt = """你是一个专业的问答助手，能够基于提供的参考资料准确回答用户问题。
+
+请严格遵循以下规则：
+1. 只使用参考资料中明确提到的信息，不要编造或推测
+2. 如果参考资料中没有相关信息，请明确说明"根据现有资料无法回答该问题"
+3. 每个答案段落结束时，请使用[1][2]等格式标注引用来源，对应的是参考资料的编号
+4. 引用来源必须准确对应到具体的资料段落
+5. 回答要清晰、有条理，重要信息可以适当强调"""
+
+        messages.insert(0, {"role": "system", "content": system_prompt})
+
+        template = """参考资料：
+{context}
+
+用户问题：{question}
+
+请基于以上参考资料回答用户问题。
+要求：
+1. 确保引用来源标注准确
+2. 回答要全面、准确、有条理"""
+
+        user_content = template.format(context=context, question=question)
+        messages.append({"role": "user", "content": user_content})
+
+        return messages
+
+    def format_answer_with_graph_markers(
+        self,
+        formatted: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        answer = formatted["answer"]
+
+        import re
+
+        graph_patterns = [
+            r'知识图谱', r'图谱', r'关联', r'推理', r'路径', r'社区',
+            r'属于', r'位于', r'创建', r'使用', r'依赖', r'包含',
+            r'-->', r'→', r'关系', r'实体'
+        ]
+
+        doc_patterns = [
+            r'文档', r'原文', r'检索', r'引用', r'来源', r'第\d+页',
+            r'\[\d+\]'
+        ]
+
+        sentences = re.split(r'(?<=[。！？])', answer)
+        marked_sentences = []
+
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+
+            has_graph = any(re.search(p, sentence) for p in graph_patterns)
+            has_doc = any(re.search(p, sentence) for p in doc_patterns)
+
+            if has_graph and has_doc:
+                marker = "🟩 "
+            elif has_graph:
+                marker = "🟦 "
+            elif has_doc:
+                marker = "🟨 "
+            else:
+                marker = ""
+
+            if marker and not sentence.startswith(("🟦", "🟨", "🟩")):
+                marked_sentences.append(marker + sentence)
+            else:
+                marked_sentences.append(sentence)
+
+        marked_answer = "".join(marked_sentences)
+
+        if not any(c in marked_answer for c in ["🟦", "🟨", "🟩"]):
+            marked_answer = "🟨 " + marked_answer
+
+        return {
+            "answer": marked_answer,
+            "citations": formatted["citations"],
+        }

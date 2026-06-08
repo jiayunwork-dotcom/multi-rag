@@ -114,6 +114,25 @@
               </div>
             </div>
 
+            <div v-if="msg.graph_citations && msg.graph_citations.length > 0" class="graph-citations-section">
+              <div class="citations-title">
+                <span class="graph-icon">🟦</span>
+                图谱推理引用:
+              </div>
+              <div
+                v-for="(cite, idx) in msg.graph_citations"
+                :key="idx"
+                class="graph-citation-item"
+              >
+                <span class="cite-icon">🟦</span>
+                <span class="cite-entity">{{ cite.entity }}</span>
+                <span class="cite-type-tag" :class="`tag-${cite.entity_type}`">
+                  {{ getEntityTypeLabel(cite.entity_type) }}
+                </span>
+                <span class="cite-count">出现 {{ cite.occurrence_count }} 次</span>
+              </div>
+            </div>
+
             <div v-if="msg.evaluation" class="evaluation-section">
               <el-tooltip placement="top" :content="`Faithfulness: ${(msg.evaluation.faithfulness * 100).toFixed(1)}%\n${msg.evaluation.faithfulness_reason || ''}`">
                 <el-tag size="small" :type="getMetricColor(msg.evaluation.faithfulness)" class="metric-tag">
@@ -211,6 +230,26 @@
             A/B对比
           </el-button>
         </el-tooltip>
+
+        <el-divider direction="vertical" />
+
+        <el-tooltip content="图谱增强问答">
+          <el-checkbox v-model="graphModeEnabled">
+            <el-icon><Share /></el-icon>
+            <span>图谱模式</span>
+          </el-checkbox>
+        </el-tooltip>
+
+        <el-select
+          v-if="graphModeEnabled"
+          v-model="graphMaxHops"
+          size="small"
+          placeholder="跳数"
+          style="width: 100px;"
+        >
+          <el-option label="1跳" :value="1" />
+          <el-option label="2跳" :value="2" />
+        </el-select>
       </div>
 
       <el-input
@@ -286,6 +325,83 @@
         <el-tab-pane label="可视化" name="visualization" v-if="visualizationData">
           <RetrievalVisualization :data="visualizationData" />
         </el-tab-pane>
+        <el-tab-pane label="图谱查询" name="graph" v-if="currentDebugMsg?.graph_debug">
+          <div v-if="currentDebugMsg.graph_debug" class="graph-debug-panel">
+            <div class="debug-section">
+              <h4>提取的实体</h4>
+              <div class="entity-list">
+                <el-tag
+                  v-for="entity in currentDebugMsg.graph_debug.query_entities"
+                  :key="entity"
+                  size="small"
+                  type="primary"
+                  class="entity-tag"
+                >
+                  {{ entity }}
+                </el-tag>
+              </div>
+            </div>
+
+            <div class="debug-section" v-if="currentDebugMsg.graph_debug.cypher_queries?.length">
+              <h4>Cypher 查询</h4>
+              <div class="cypher-queries">
+                <div
+                  v-for="(query, idx) in currentDebugMsg.graph_debug.cypher_queries"
+                  :key="idx"
+                  class="cypher-query"
+                >
+                  <span class="query-index">{{ idx + 1 }}.</span>
+                  <code>{{ query }}</code>
+                </div>
+              </div>
+            </div>
+
+            <div class="debug-section">
+              <h4>查询统计</h4>
+              <div class="stats-grid">
+                <div class="stat-item">
+                  <span class="stat-label">找到路径</span>
+                  <span class="stat-value">{{ currentDebugMsg.graph_debug.paths_found }}</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">图谱上下文长度</span>
+                  <span class="stat-value">{{ currentDebugMsg.graph_debug.graph_context_length }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="debug-section" v-if="currentDebugMsg.graph_results?.paths?.length">
+              <h4>查询路径 (起点 → 关系 → 终点)</h4>
+              <div class="graph-paths">
+                <div
+                  v-for="(path, idx) in currentDebugMsg.graph_results.paths"
+                  :key="idx"
+                  class="path-item"
+                >
+                  <div class="path-score">得分: {{ path.score.toFixed(3) }}</div>
+                  <div class="path-chain">
+                    <span
+                      v-for="(step, stepIdx) in path.path"
+                      :key="stepIdx"
+                      class="path-step"
+                    >
+                      <template v-if="step.type === 'entity'">
+                        <span class="path-entity" :class="`entity-${step.entity_type}`">
+                          {{ step.name }}
+                        </span>
+                      </template>
+                      <template v-else-if="step.type === 'relation'">
+                        <span class="path-relation">
+                          → {{ step.relation_type }} →
+                        </span>
+                      </template>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-dialog>
 
@@ -359,7 +475,23 @@ const activeCompareTab = ref('analysis')
 const compareModeEnabled = ref(false)
 const selectedCompareKbIds = ref<number[]>([])
 
+const graphModeEnabled = ref(false)
+const graphMaxHops = ref(2)
+
 const kbTagColors = ['#5470c6', '#91cc75', '#fac858']
+
+const entityTypes = [
+  { value: 'person', label: '人物', icon: '👤' },
+  { value: 'organization', label: '组织', icon: '🏢' },
+  { value: 'location', label: '地点', icon: '📍' },
+  { value: 'tech_concept', label: '技术概念', icon: '💡' },
+  { value: 'event', label: '事件', icon: '📅' }
+]
+
+function getEntityTypeLabel(type: string) {
+  const t = entityTypes.find(t => t.value === type)
+  return t?.label || type
+}
 
 function getKbName(kbId: number): string {
   const kb = store.knowledgeBases.find(k => k.id === kbId)
@@ -576,7 +708,9 @@ async function sendNormalApiMessage(questionText: string) {
     conversation_id: store.currentConversationId || undefined,
     knowledge_base_id: store.currentKnowledgeBaseId || undefined,
     top_k: topK.value,
-    stream: false
+    stream: false,
+    use_graph: graphModeEnabled.value,
+    graph_max_hops: graphMaxHops.value
   })
 
   const assistantMsg: Message = {
@@ -587,7 +721,10 @@ async function sendNormalApiMessage(questionText: string) {
     citations: res.data.citations,
     retrieval_debug: res.data.retrieval_debug,
     evaluation: res.data.evaluation,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    graph_results: res.data.graph_results,
+    graph_debug: res.data.graph_debug,
+    graph_citations: res.data.graph_citations
   }
   store.addMessage(assistantMsg)
   await store.loadConversations()
@@ -599,7 +736,9 @@ async function sendStreamMessage(questionText: string) {
     conversation_id: store.currentConversationId || undefined,
     knowledge_base_id: store.currentKnowledgeBaseId || undefined,
     top_k: topK.value,
-    stream: true
+    stream: true,
+    use_graph: graphModeEnabled.value,
+    graph_max_hops: graphMaxHops.value
   })
 
   const reader = response.body?.getReader()
@@ -609,6 +748,9 @@ async function sendStreamMessage(questionText: string) {
   let citations: Citation[] = []
   let evaluation: any = null
   let retrievalDebug: any = null
+  let graphResults: any = null
+  let graphDebug: any = null
+  let graphCitations: any[] = []
 
   const assistantMsg: Message = {
     id: Date.now() + 1,
@@ -647,6 +789,15 @@ async function sendStreamMessage(questionText: string) {
             } else if (parsed.type === 'debug') {
               retrievalDebug = parsed.debug
               store.updateLastMessage({ retrieval_debug: retrievalDebug })
+            } else if (parsed.type === 'graph_results') {
+              graphResults = parsed.graph_results
+              store.updateLastMessage({ graph_results: graphResults })
+            } else if (parsed.type === 'graph_debug') {
+              graphDebug = parsed.graph_debug
+              store.updateLastMessage({ graph_debug: graphDebug })
+            } else if (parsed.type === 'graph_citations') {
+              graphCitations = parsed.graph_citations
+              store.updateLastMessage({ graph_citations: graphCitations })
             }
           } catch (e) {
             console.error('Parse SSE error:', e)
@@ -1008,6 +1159,203 @@ async function sendStreamMessage(questionText: string) {
     margin: 0;
     line-height: 1.8;
     color: #303133;
+  }
+}
+
+.graph-citations-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+
+  .citations-title {
+    font-weight: 600;
+    color: #606266;
+    margin-bottom: 8px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .graph-icon {
+      font-size: 14px;
+    }
+  }
+
+  .graph-citation-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: #ecf5ff;
+    border-radius: 6px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+
+    &:hover {
+      background: #d9ecff;
+    }
+
+    .cite-icon {
+      font-size: 12px;
+    }
+
+    .cite-entity {
+      font-weight: 500;
+      color: #409eff;
+    }
+
+    .cite-type-tag {
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .cite-count {
+      color: #909399;
+      font-size: 12px;
+      margin-left: auto;
+    }
+  }
+}
+
+.tag-person { background: #fee2e2; color: #dc2626; }
+.tag-organization { background: #ccfbf1; color: #0d9488; }
+.tag-location { background: #cffafe; color: #0891b2; }
+.tag-tech_concept { background: #d1fae5; color: #059669; }
+.tag-event { background: #fef3c7; color: #d97706; }
+
+.graph-debug-panel {
+  padding: 16px;
+
+  .debug-section {
+    margin-bottom: 24px;
+
+    h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      color: #303133;
+      font-weight: 600;
+    }
+  }
+
+  .entity-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    .entity-tag {
+      margin-right: 0;
+    }
+  }
+
+  .cypher-queries {
+    .cypher-query {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      background: #f5f7fa;
+      border-radius: 6px;
+      margin-bottom: 8px;
+
+      .query-index {
+        color: #909399;
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+
+      code {
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 12px;
+        color: #606266;
+        word-break: break-all;
+      }
+    }
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+
+    .stat-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px;
+      background: #f5f7fa;
+      border-radius: 6px;
+
+      .stat-label {
+        color: #909399;
+        font-size: 13px;
+      }
+
+      .stat-value {
+        font-weight: 600;
+        color: #409eff;
+        font-size: 14px;
+      }
+    }
+  }
+
+  .graph-paths {
+    .path-item {
+      padding: 16px;
+      background: #f5f7fa;
+      border-radius: 8px;
+      margin-bottom: 12px;
+
+      .path-score {
+        font-size: 12px;
+        color: #909399;
+        margin-bottom: 8px;
+      }
+
+      .path-chain {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+
+        .path-entity {
+          padding: 4px 12px;
+          border-radius: 16px;
+          font-weight: 500;
+          font-size: 13px;
+          color: white;
+
+          &.entity-person { background: #ff6b6b; }
+          &.entity-organization { background: #4ecdc4; }
+          &.entity-location { background: #45b7d1; }
+          &.entity-tech_concept { background: #96ceb4; }
+          &.entity-event { background: #f9cb40; color: #333; }
+        }
+
+        .path-relation {
+          color: #909399;
+          font-size: 12px;
+          padding: 2px 8px;
+          background: #e4e7ed;
+          border-radius: 4px;
+        }
+      }
+    }
+  }
+}
+
+.input-actions {
+  .mode-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .graph-tag {
+      background: #ecf5ff;
+      color: #409eff;
+      border-color: #d9ecff;
+    }
   }
 }
 </style>

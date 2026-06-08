@@ -50,6 +50,13 @@
           </div>
           <div class="kb-actions">
             <el-button
+              size="small"
+              @click="viewDetail(kb)"
+            >
+              <el-icon><View /></el-icon>
+              详情
+            </el-button>
+            <el-button
               type="primary"
               size="small"
               @click="selectKb(kb)"
@@ -115,10 +122,13 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { useAppStore } from '@/stores'
 import { knowledgeBaseApi } from '@/api'
 import type { KnowledgeBase } from '@/types'
+
+const router = useRouter()
 
 const store = useAppStore()
 
@@ -162,6 +172,10 @@ function handleMenuCommand(cmd: string, kb: KnowledgeBase) {
 function selectKb(kb: KnowledgeBase) {
   store.currentKnowledgeBaseId = kb.id
   ElMessage.success(`已切换到知识库: ${kb.name}`)
+}
+
+function viewDetail(kb: KnowledgeBase) {
+  router.push(`/knowledge-base/${kb.id}`)
 }
 
 async function createKnowledgeBase() {

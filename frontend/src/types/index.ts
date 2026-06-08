@@ -72,6 +72,12 @@ export interface Message {
   evaluation?: EvaluationMetrics
   response_time?: number
   created_at: string
+  is_compare?: boolean
+  compare_kb_ids?: number[]
+  compare_results?: any
+  graph_results?: GraphQueryResult
+  graph_debug?: GraphQueryDebug
+  graph_citations?: GraphCitation[]
 }
 
 export interface Citation {
@@ -267,4 +273,192 @@ export interface ABCompareResponse {
   strategy_a: StrategyResult
   strategy_b: StrategyResult
   question: string
+}
+
+export type EntityType = 'person' | 'organization' | 'location' | 'tech_concept' | 'event'
+export type RelationType = 'belongs_to' | 'located_in' | 'created_by' | 'uses' | 'depends_on' | 'contains'
+export type GraphBuildStatus = 'pending' | 'building' | 'completed' | 'failed'
+
+export interface GraphEntity {
+  id: number
+  knowledge_base_id: number
+  name: string
+  entity_type: EntityType
+  description?: string
+  neo4j_id?: string
+  occurrence_count: number
+  document_count: number
+  degree: number
+  related_chunks: Record<string, any>[]
+  metadata?: Record<string, any>
+  created_at: string
+  updated_at?: string
+}
+
+export interface GraphRelation {
+  id: number
+  knowledge_base_id: number
+  source_entity_id: number
+  target_entity_id: number
+  relation_type: RelationType
+  description?: string
+  neo4j_id?: string
+  frequency: number
+  source_entity_name?: string
+  target_entity_name?: string
+  source_entity_type?: EntityType
+  target_entity_type?: EntityType
+  created_at: string
+  updated_at?: string
+}
+
+export interface EntityOccurrence {
+  id: number
+  entity_id: number
+  document_id: number
+  chunk_id: number
+  document_title?: string
+  chunk_index?: number
+  context_snippet?: string
+  start_pos?: number
+  end_pos?: number
+  confidence: number
+  created_at: string
+}
+
+export interface GraphEntityDetail extends GraphEntity {
+  occurrences: EntityOccurrence[]
+  source_relations: GraphRelation[]
+  target_relations: GraphRelation[]
+}
+
+export interface GraphEntityCreate {
+  knowledge_base_id: number
+  name: string
+  entity_type: EntityType
+  description?: string
+  metadata?: Record<string, any>
+}
+
+export interface GraphEntityUpdate {
+  name?: string
+  entity_type?: EntityType
+  description?: string
+  metadata?: Record<string, any>
+}
+
+export interface GraphRelationCreate {
+  knowledge_base_id: number
+  source_entity_id: number
+  target_entity_id: number
+  relation_type: RelationType
+  description?: string
+  metadata?: Record<string, any>
+}
+
+export interface GraphRelationUpdate {
+  relation_type?: RelationType
+  description?: string
+  metadata?: Record<string, any>
+}
+
+export interface GraphStats {
+  knowledge_base_id: number
+  entity_count: number
+  relation_count: number
+  connected_components: number
+  avg_degree: number
+  max_degree: number
+  community_count: number
+  entity_types_distribution: Record<string, number>
+  relation_types_distribution: Record<string, number>
+  build_status: GraphBuildStatus
+  last_built_at?: string
+}
+
+export interface GraphNode {
+  id: string
+  name: string
+  entity_type: EntityType
+  size: number
+  degree: number
+  community_id?: number
+  x?: number
+  y?: number
+  is_super_node: boolean
+  super_node_members?: string[]
+}
+
+export interface GraphEdge {
+  id: string
+  source: string
+  target: string
+  relation_type: RelationType
+  width: number
+  frequency: number
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  stats: GraphStats
+}
+
+export interface GraphPath {
+  path: Record<string, any>[]
+  score: number
+}
+
+export interface GraphQueryResult {
+  query_entities: string[]
+  paths: GraphPath[]
+  related_entities: GraphEntity[]
+  graph_context: string
+}
+
+export interface GraphQueryDebug {
+  query_entities: string[]
+  cypher_queries: string[]
+  paths_found: number
+  graph_context_length: number
+}
+
+export interface GraphBuildRequest {
+  knowledge_base_id: number
+  document_ids?: number[]
+  rebuild: boolean
+}
+
+export interface GraphBuildProgress {
+  status: GraphBuildStatus
+  progress: number
+  stage?: string
+  entity_count: number
+  relation_count: number
+  error?: string
+}
+
+export interface GraphQueryRequest {
+  question: string
+  knowledge_base_id: number
+  max_hops?: number
+  max_entities?: number
+}
+
+export interface ChatGraphRequest extends ChatRequest {
+  use_graph?: boolean
+  graph_max_hops?: number
+}
+
+export interface ChatGraphResponse extends ChatResponse {
+  graph_results?: GraphQueryResult
+  graph_debug?: GraphQueryDebug
+  graph_citations?: Record<string, any>[]
+}
+
+export interface GraphCitation {
+  type: 'graph'
+  entity: string
+  entity_type: EntityType
+  occurrence_count: number
 }

@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import engine, Base
 from app.middleware import AuthMiddleware, LoggingMiddleware, CORSMiddleware as CustomCORSMiddleware
-from app.routers import kb_router, doc_router, chat_router, admin_router
+from app.routers import kb_router, doc_router, chat_router, admin_router, graph_router
 from app.services.pipeline_service import service_manager
 
 logging.basicConfig(
@@ -89,6 +89,7 @@ app.include_router(kb_router)
 app.include_router(doc_router)
 app.include_router(chat_router)
 app.include_router(admin_router)
+app.include_router(graph_router)
 
 if os.path.exists(settings.UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")

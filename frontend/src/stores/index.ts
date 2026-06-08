@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { KnowledgeBase, Document, Conversation, Message, Citation, RetrievalDebug, EvaluationMetrics } from '@/types'
+import type { KnowledgeBase, Document, Conversation, Message, Citation, RetrievalDebug, EvaluationMetrics, GraphQueryResult, GraphQueryDebug, GraphCitation } from '@/types'
 import { knowledgeBaseApi, documentApi, chatApi, adminApi } from '@/api'
 import type { SystemConfig, UsageStats } from '@/types'
 

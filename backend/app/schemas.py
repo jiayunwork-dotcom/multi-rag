@@ -17,6 +17,30 @@ class ChunkStrategy(str, Enum):
     SEMANTIC = "semantic"
 
 
+class EntityType(str, Enum):
+    PERSON = "person"
+    ORGANIZATION = "organization"
+    LOCATION = "location"
+    TECH_CONCEPT = "tech_concept"
+    EVENT = "event"
+
+
+class RelationType(str, Enum):
+    BELONGS_TO = "belongs_to"
+    LOCATED_IN = "located_in"
+    CREATED_BY = "created_by"
+    USES = "uses"
+    DEPENDS_ON = "depends_on"
+    CONTAINS = "contains"
+
+
+class GraphBuildStatus(str, Enum):
+    PENDING = "pending"
+    BUILDING = "building"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class KnowledgeBaseBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
@@ -364,3 +388,232 @@ class ABCompareResponse(BaseModel):
 
 
 DocumentDetail.model_rebuild()
+
+
+class GraphEntityBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    entity_type: EntityType
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GraphEntityCreate(GraphEntityBase):
+    knowledge_base_id: int
+
+
+class GraphEntityUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    entity_type: Optional[EntityType] = None
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GraphEntity(GraphEntityBase):
+    id: int
+    knowledge_base_id: int
+    neo4j_id: Optional[str] = None
+    occurrence_count: int = 0
+    document_count: int = 0
+    degree: int = 0
+    related_chunks: List[Dict[str, Any]] = []
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GraphEntityDetail(GraphEntity):
+    occurrences: List["EntityOccurrence"] = []
+    source_relations: List["GraphRelation"] = []
+    target_relations: List["GraphRelation"] = []
+
+
+class GraphRelationBase(BaseModel):
+    source_entity_id: int
+    target_entity_id: int
+    relation_type: RelationType
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GraphRelationCreate(GraphRelationBase):
+    knowledge_base_id: int
+
+
+class GraphRelationUpdate(BaseModel):
+    relation_type: Optional[RelationType] = None
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GraphRelation(GraphRelationBase):
+    id: int
+    knowledge_base_id: int
+    neo4j_id: Optional[str] = None
+    frequency: int = 0
+    source_entity_name: Optional[str] = None
+    target_entity_name: Optional[str] = None
+    source_entity_type: Optional[EntityType] = None
+    target_entity_type: Optional[EntityType] = None
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EntityOccurrence(BaseModel):
+    id: int
+    entity_id: int
+    document_id: int
+    chunk_id: int
+    document_title: Optional[str] = None
+    chunk_index: Optional[int] = None
+    context_snippet: Optional[str] = None
+    start_pos: Optional[int] = None
+    end_pos: Optional[int] = None
+    confidence: float = 1.0
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RelationOccurrence(BaseModel):
+    id: int
+    relation_id: int
+    document_id: int
+    chunk_id: int
+    document_title: Optional[str] = None
+    chunk_index: Optional[int] = None
+    context_snippet: Optional[str] = None
+    confidence: float = 1.0
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ExtractedEntity(BaseModel):
+    name: str
+    entity_type: EntityType
+    context_snippet: str
+    start_pos: Optional[int] = None
+    end_pos: Optional[int] = None
+    confidence: float = 0.8
+
+
+class ExtractedRelation(BaseModel):
+    source_entity: str
+    target_entity: str
+    source_type: EntityType
+    target_type: EntityType
+    relation_type: RelationType
+    context_snippet: str
+    confidence: float = 0.8
+
+
+class GraphExtractionResult(BaseModel):
+    entities: List[ExtractedEntity]
+    relations: List[ExtractedRelation]
+
+
+class GraphBuildRequest(BaseModel):
+    knowledge_base_id: int
+    document_ids: Optional[List[int]] = None
+    rebuild: bool = False
+
+
+class GraphBuildProgress(BaseModel):
+    status: GraphBuildStatus
+    progress: float
+    stage: Optional[str] = None
+    entity_count: int = 0
+    relation_count: int = 0
+    error: Optional[str] = None
+
+
+class GraphStats(BaseModel):
+    knowledge_base_id: int
+    entity_count: int
+    relation_count: int
+    connected_components: int
+    avg_degree: float
+    max_degree: int
+    community_count: int
+    entity_types_distribution: Dict[str, int]
+    relation_types_distribution: Dict[str, int]
+    build_status: GraphBuildStatus
+    last_built_at: Optional[datetime]
+
+
+class GraphNode(BaseModel):
+    id: str
+    name: str
+    entity_type: EntityType
+    size: int = 10
+    degree: int = 0
+    community_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    is_super_node: bool = False
+    super_node_members: Optional[List[str]] = None
+
+
+class GraphEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    relation_type: RelationType
+    width: float = 1.0
+    frequency: int = 1
+
+
+class GraphData(BaseModel):
+    nodes: List[GraphNode]
+    edges: List[GraphEdge]
+    stats: GraphStats
+
+
+class GraphQueryRequest(BaseModel):
+    question: str
+    knowledge_base_id: int
+    max_hops: int = 2
+    max_entities: int = 10
+
+
+class GraphPath(BaseModel):
+    path: List[Dict[str, Any]]
+    score: float
+
+
+class GraphQueryResult(BaseModel):
+    query_entities: List[str]
+    paths: List[GraphPath]
+    related_entities: List[GraphEntity]
+    graph_context: str
+
+
+class GraphQueryDebug(BaseModel):
+    query_entities: List[str]
+    cypher_queries: List[str]
+    paths_found: int
+    graph_context_length: int
+
+
+class ChatGraphRequest(BaseModel):
+    question: str
+    conversation_id: Optional[int] = None
+    knowledge_base_id: Optional[int] = None
+    stream: bool = False
+    top_k: int = Field(default=10, ge=1, le=50)
+    rerank_n: int = Field(default=5, ge=1, le=20)
+    use_graph: bool = False
+    graph_max_hops: int = 2
+    strategy: Optional[RetrievalStrategy] = None
+
+
+class ChatGraphResponse(ChatResponse):
+    graph_results: Optional[GraphQueryResult] = None
+    graph_debug: Optional[GraphQueryDebug] = None
+    graph_citations: Optional[List[Dict[str, Any]]] = None
+
+
+GraphEntityDetail.model_rebuild()
