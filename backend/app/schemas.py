@@ -188,6 +188,15 @@ class ConversationDetail(Conversation):
     messages: List[Message] = []
 
 
+class RetrievalStrategy(BaseModel):
+    semantic_top_k: int = Field(default=20, ge=1, le=50)
+    bm25_top_k: int = Field(default=20, ge=1, le=50)
+    use_rrf: bool = True
+    rrf_k: int = Field(default=60, ge=10, le=120)
+    use_rerank: bool = True
+    rerank_n: int = Field(default=5, ge=1, le=20)
+
+
 class ChatRequest(BaseModel):
     question: str
     conversation_id: Optional[int] = None
@@ -195,6 +204,7 @@ class ChatRequest(BaseModel):
     stream: bool = False
     top_k: int = Field(default=10, ge=1, le=50)
     rerank_n: int = Field(default=5, ge=1, le=20)
+    strategy: Optional[RetrievalStrategy] = None
 
 
 class RetrievalResult(BaseModel):
@@ -263,6 +273,94 @@ class UsageStats(BaseModel):
     total_documents: int
     total_knowledge_bases: int
     total_chunks: int
+
+
+class CompareRequest(BaseModel):
+    question: str
+    knowledge_base_ids: List[int] = Field(..., min_length=2, max_length=3)
+    conversation_id: Optional[int] = None
+    stream: bool = False
+    top_k: int = Field(default=10, ge=1, le=50)
+    rerank_n: int = Field(default=5, ge=1, le=20)
+    strategy: Optional[RetrievalStrategy] = None
+
+
+class KnowledgeBaseRetrievalResult(BaseModel):
+    knowledge_base_id: int
+    knowledge_base_name: str
+    retrieval_results: List[RetrievalResult]
+    retrieval_debug: Dict[str, Any]
+
+
+class CompareViewpoint(BaseModel):
+    viewpoint: str
+    knowledge_base_id: int
+    knowledge_base_name: str
+    document_id: int
+    document_title: str
+    chunk_id: int
+    page_number: Optional[int] = None
+
+
+class CompareAnalysis(BaseModel):
+    comparison_table: Optional[List[Dict[str, Any]]] = None
+    viewpoints: List[CompareViewpoint]
+    summary: str
+
+
+class CompareChatResponse(BaseModel):
+    answer: str
+    conversation_id: int
+    kb_results: List[KnowledgeBaseRetrievalResult]
+    analysis: CompareAnalysis
+    citations: List[Dict[str, Any]]
+    evaluation: Optional[Dict[str, Any]] = None
+
+
+class VisualizationPoint(BaseModel):
+    x: float
+    y: float
+    chunk_id: int
+    document_id: int
+    document_title: str
+    chunk_index: int
+    content_preview: str
+    relevance_score: float
+
+
+class VisualizationData(BaseModel):
+    query_point: VisualizationPoint
+    chunks: List[VisualizationPoint]
+    score_data: List[Dict[str, Any]]
+    explained_variance_ratio: List[float]
+
+
+class ABCompareRequest(BaseModel):
+    question: str
+    knowledge_base_id: int
+    conversation_id: Optional[int] = None
+    stream: bool = False
+    strategy_a: RetrievalStrategy
+    strategy_b: RetrievalStrategy
+
+
+class StrategyResult(BaseModel):
+    strategy_name: str
+    strategy_config: RetrievalStrategy
+    retrieval_time_ms: float
+    chunk_count: int
+    final_score: float
+    retrieval_results: List[RetrievalResult]
+    retrieval_debug: Dict[str, Any]
+    answer: str
+    citations: List[Dict[str, Any]]
+
+
+class ABCompareResponse(BaseModel):
+    conversation_id: int
+    strategy_a: StrategyResult
+    strategy_b: StrategyResult
+    question: str
 
 
 DocumentDetail.model_rebuild()

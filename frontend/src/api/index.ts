@@ -1,7 +1,9 @@
 import api from './client'
 import type {
   KnowledgeBase, Document, ParseTask, Conversation, Message,
-  ChatResponse, ChatRequest, SystemConfig, UsageStats, Chunk
+  ChatResponse, ChatRequest, SystemConfig, UsageStats, Chunk,
+  CompareRequest, CompareChatResponse, VisualizationResponse,
+  ABCompareRequest, ABCompareResponse
 } from '@/types'
 
 export const knowledgeBaseApi = {
@@ -75,7 +77,13 @@ export const chatApi = {
       },
       body: JSON.stringify({ ...data, stream: true })
     })
-  }
+  },
+  sendCompareMessage: (data: CompareRequest) =>
+    api.post<CompareChatResponse>('/chat/compare', data),
+  getVisualization: (data: ChatRequest) =>
+    api.post<VisualizationResponse>('/chat/visualization', data),
+  sendABCompare: (data: ABCompareRequest) =>
+    api.post<ABCompareResponse>('/chat/ab-compare', data)
 }
 
 export const adminApi = {

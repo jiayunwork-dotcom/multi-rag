@@ -126,6 +126,15 @@ export interface ChatResponse {
   evaluation?: EvaluationMetrics
 }
 
+export interface RetrievalStrategy {
+  semantic_top_k: number
+  bm25_top_k: number
+  use_rrf: boolean
+  rrf_k: number
+  use_rerank: boolean
+  rerank_n: number
+}
+
 export interface ChatRequest {
   question: string
   conversation_id?: number
@@ -133,6 +142,7 @@ export interface ChatRequest {
   stream?: boolean
   top_k?: number
   rerank_n?: number
+  strategy?: RetrievalStrategy
 }
 
 export interface SystemConfig {
@@ -163,4 +173,98 @@ export interface ChunkingConfig {
   chunk_size: number
   chunk_overlap: number
   semantic_threshold: number
+}
+
+export interface CompareRequest {
+  question: string
+  knowledge_base_ids: number[]
+  conversation_id?: number
+  stream?: boolean
+  top_k?: number
+  rerank_n?: number
+  strategy?: RetrievalStrategy
+}
+
+export interface KnowledgeBaseRetrievalResult {
+  knowledge_base_id: number
+  knowledge_base_name: string
+  retrieval_results: RetrievalResult[]
+  retrieval_debug: RetrievalDebug
+}
+
+export interface CompareViewpoint {
+  viewpoint: string
+  knowledge_base_id: number
+  knowledge_base_name: string
+  document_id: number
+  document_title: string
+  chunk_id: number
+  page_number?: number
+}
+
+export interface CompareAnalysis {
+  comparison_table?: Record<string, any>[]
+  viewpoints: CompareViewpoint[]
+  summary: string
+}
+
+export interface CompareChatResponse {
+  answer: string
+  conversation_id: number
+  kb_results: KnowledgeBaseRetrievalResult[]
+  analysis: CompareAnalysis
+  citations: Citation[]
+  evaluation?: EvaluationMetrics
+}
+
+export interface VisualizationPoint {
+  x: number
+  y: number
+  chunk_id: number
+  document_id: number
+  document_title: string
+  chunk_index: number
+  content_preview: string
+  relevance_score: number
+}
+
+export interface VisualizationData {
+  query_point: VisualizationPoint
+  chunks: VisualizationPoint[]
+  score_data: Record<string, any>[]
+  explained_variance_ratio: number[]
+}
+
+export interface VisualizationResponse {
+  visualization: VisualizationData
+  retrieval_debug: RetrievalDebug
+  retrieval_results: RetrievalResult[]
+}
+
+export interface ABCompareRequest {
+  question: string
+  knowledge_base_id: number
+  conversation_id?: number
+  stream?: boolean
+  strategy_a: RetrievalStrategy
+  strategy_b: RetrievalStrategy
+}
+
+export interface StrategyResult {
+  strategy_name: string
+  strategy_config: RetrievalStrategy
+  retrieval_time_ms: number
+  chunk_count: number
+  final_score: number
+  retrieval_results: RetrievalResult[]
+  retrieval_debug: RetrievalDebug
+  answer: string
+  citations: Citation[]
+}
+
+export interface ABCompareResponse {
+  conversation_id: number
+  strategy_a: StrategyResult
+  strategy_b: StrategyResult
+  question: string
 }

@@ -201,3 +201,136 @@ class LLMService:
             "answer": answer_with_citations,
             "citations": used_citations,
         }
+
+    def build_compare_context(
+        self,
+        kb_results: Dict[int, Dict[str, Any]]
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        context_parts = []
+        citations = []
+        cite_index = 1
+
+        for kb_id, kb_data in kb_results.items():
+            kb_name = kb_data.get("knowledge_base_name", f"知识库{kb_id}")
+            retrieval_results = kb_data.get("retrieval_results", [])
+
+            context_parts.append(f"\n=== 知识库: {kb_name} (ID: {kb_id}) ===")
+
+            for result in retrieval_results:
+                doc_title = result.get("document_title", "Unknown Document")
+                page_num = result.get("page_number")
+                content = result.get("content", "")
+
+                citation_mark = f"[{cite_index}]"
+                kb_tag = f"[{kb_name}]"
+
+                if page_num:
+                    context_part = f"{citation_mark}{kb_tag} 来源: {doc_title} (第{page_num}页)\n{content}\n"
+                else:
+                    context_part = f"{citation_mark}{kb_tag} 来源: {doc_title}\n{content}\n"
+
+                context_parts.append(context_part)
+
+                citations.append({
+                    "index": cite_index,
+                    "kb_id": kb_id,
+                    "kb_name": kb_name,
+                    "chunk_id": result.get("chunk_id"),
+                    "document_id": result.get("document_id"),
+                    "document_title": doc_title,
+                    "chunk_index": result.get("chunk_index"),
+                    "page_number": page_num,
+                    "content": content,
+                    "semantic_score": result.get("semantic_score"),
+                    "bm25_score": result.get("bm25_score"),
+                    "rrf_score": result.get("rrf_score"),
+                    "rerank_score": result.get("rerank_score"),
+                })
+                cite_index += 1
+
+        context = "\n".join(context_parts)
+        return context, citations
+
+    def build_compare_prompt(
+        self,
+        question: str,
+        context: str,
+        kb_names: List[str],
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> List[Dict[str, str]]:
+        kb_list_str = ", ".join(kb_names)
+
+        system_prompt = f"""你是一个专业的多知识库对比分析助手。用户会提出问题，你需要基于{len(kb_names)}个知识库的内容进行对比分析。
+
+请严格遵循以下规则：
+1. 只使用参考资料中明确提到的信息，不要编造或推测
+2. 如果某个知识库中没有相关信息，请明确说明"[知识库名]中未提及相关内容"
+3. 回答需要清晰区分各知识库的观点，建议使用表格形式展示对比
+4. 每个观点必须标注来源：使用[编号][知识库名]格式，例如[1][知识库A]
+5. 对比分析应包含：各知识库的共同点、差异点、各自的侧重点
+6. 最后给出综合总结
+
+参考资料格式说明：
+- 每个段落开头有[编号][知识库名]标记，表示该内容来自哪个知识库
+- 编号是全局唯一的，用于精确引用
+
+{kb_list_str}"""
+
+        messages = []
+        if conversation_history:
+            for msg in conversation_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+
+        messages.insert(0, {"role": "system", "content": system_prompt})
+
+        user_content = f"""参考资料：
+{context}
+
+用户问题：{question}
+
+请基于以上{len(kb_names)}个知识库的内容，进行对比分析回答。
+要求：
+1. 首先用表格形式对比各知识库的核心观点
+2. 然后详细分析各知识库的异同点
+3. 每个观点都要标注来源，格式为[编号][知识库名]
+4. 最后给出综合总结"""
+
+        messages.append({"role": "user", "content": user_content})
+        return messages
+
+    def parse_compare_analysis(
+        self,
+        answer: str,
+        citations: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        pattern = r'\[(\d+)\]\[([^\]]+)\]'
+        matches = re.findall(pattern, answer)
+
+        viewpoints = []
+        seen_indices = set()
+
+        for num_str, kb_name in matches:
+            try:
+                idx = int(num_str) - 1
+                if 0 <= idx < len(citations) and idx not in seen_indices:
+                    cite = citations[idx]
+                    viewpoints.append({
+                        "viewpoint": answer[max(0, answer.find(f"[{num_str}][{kb_name}]") - 50):answer.find(f"[{num_str}][{kb_name}]") + 50].strip(),
+                        "knowledge_base_id": cite.get("kb_id"),
+                        "knowledge_base_name": cite.get("kb_name"),
+                        "document_id": cite.get("document_id"),
+                        "document_title": cite.get("document_title"),
+                        "chunk_id": cite.get("chunk_id"),
+                        "page_number": cite.get("page_number"),
+                    })
+                    seen_indices.add(idx)
+            except (ValueError, IndexError):
+                continue
+
+        return {
+            "viewpoints": viewpoints,
+            "summary": "对比分析完成"
+        }

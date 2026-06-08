@@ -1,9 +1,10 @@
 import time
 import json
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
 import logging
 from datetime import datetime
 
@@ -246,12 +247,20 @@ async def chat(
     conv_service = ConversationService(db, service_manager.llm_service)
     conversation_history = conv_service.get_conversation_history(conv.id)
 
-    retrieval_results, retrieval_debug = service_manager.retrieval_service.hybrid_search(
-        knowledge_base_id=knowledge_base_id,
-        query=request.question,
-        top_k=request.top_k,
-        rerank_n=request.rerank_n,
-    )
+    if request.strategy:
+        strategy_dict = request.strategy.model_dump()
+        retrieval_results, retrieval_debug = service_manager.retrieval_service.search_with_strategy(
+            knowledge_base_id=knowledge_base_id,
+            query=request.question,
+            strategy=strategy_dict
+        )
+    else:
+        retrieval_results, retrieval_debug = service_manager.retrieval_service.hybrid_search(
+            knowledge_base_id=knowledge_base_id,
+            query=request.question,
+            top_k=request.top_k,
+            rerank_n=request.rerank_n,
+        )
 
     for result in retrieval_results:
         doc = db.query(models.Document).filter(
@@ -386,3 +395,336 @@ async def stream_chat_response(
     yield f"data: {json.dumps({'type': 'evaluation', 'evaluation': evaluation})}\n\n"
     yield f"data: {json.dumps({'type': 'debug', 'retrieval_debug': retrieval_debug})}\n\n"
     yield f"data: {json.dumps({'type': 'done', 'response_time': response_time})}\n\n"
+
+
+@router.post("/compare", response_model=schemas.CompareChatResponse)
+async def chat_compare(
+    request: schemas.CompareRequest,
+    db: Session = Depends(get_db)
+):
+    start_time = time.time()
+
+    if request.conversation_id:
+        conv = db.query(models.Conversation).filter(
+            models.Conversation.id == request.conversation_id
+        ).first()
+        if not conv:
+            raise HTTPException(status_code=404, detail="会话不存在")
+    else:
+        conv = models.Conversation(
+            knowledge_base_id=request.knowledge_base_ids[0],
+        )
+        db.add(conv)
+        db.flush()
+        db.refresh(conv)
+
+    kb_results_list = []
+    kb_results_dict = {}
+    kb_names = []
+
+    for kb_id in request.knowledge_base_ids:
+        kb = db.query(models.KnowledgeBase).filter(
+            models.KnowledgeBase.id == kb_id
+        ).first()
+        if not kb:
+            raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
+        kb_names.append(kb.name)
+
+    strategy_dict = request.strategy.model_dump() if request.strategy else None
+
+    retrieval_results_map = service_manager.retrieval_service.search_multiple_kb(
+        knowledge_base_ids=request.knowledge_base_ids,
+        query=request.question,
+        strategy=strategy_dict,
+        top_k=request.top_k,
+        rerank_n=request.rerank_n
+    )
+
+    for kb_id in request.knowledge_base_ids:
+        kb = db.query(models.KnowledgeBase).filter(
+            models.KnowledgeBase.id == kb_id
+        ).first()
+        retrieval_results, retrieval_debug = retrieval_results_map[kb_id]
+
+        for result in retrieval_results:
+            doc = db.query(models.Document).filter(
+                models.Document.id == result.get("document_id")
+            ).first()
+            if doc:
+                result["document_title"] = doc.title
+
+        formatted_results = []
+        for r in retrieval_results:
+            formatted_results.append(schemas.RetrievalResult(
+                chunk_id=r.get("chunk_id", 0),
+                document_id=r.get("document_id", 0),
+                document_title=r.get("document_title", "Unknown"),
+                chunk_index=r.get("chunk_index", 0),
+                content=r.get("content", ""),
+                page_number=r.get("page_number"),
+                semantic_score=r.get("semantic_score"),
+                bm25_score=r.get("bm25_score"),
+                rrf_score=r.get("rrf_score"),
+                rerank_score=r.get("rerank_score"),
+            ))
+
+        kb_result = schemas.KnowledgeBaseRetrievalResult(
+            knowledge_base_id=kb_id,
+            knowledge_base_name=kb.name,
+            retrieval_results=formatted_results,
+            retrieval_debug=retrieval_debug
+        )
+        kb_results_list.append(kb_result)
+        kb_results_dict[kb_id] = {
+            "knowledge_base_name": kb.name,
+            "retrieval_results": retrieval_results
+        }
+
+    user_message = models.Message(
+        conversation_id=conv.id,
+        role="user",
+        content=request.question,
+    )
+    db.add(user_message)
+    db.flush()
+
+    if not conv.title:
+        conv_service = ConversationService(db)
+        conv.title = conv_service.generate_conversation_title(request.question)
+        db.flush()
+
+    context, citations = service_manager.llm_service.build_compare_context(kb_results_dict)
+
+    conv_service = ConversationService(db, service_manager.llm_service)
+    conversation_history = conv_service.get_conversation_history(conv.id)
+
+    messages = service_manager.llm_service.build_compare_prompt(
+        question=request.question,
+        context=context,
+        kb_names=kb_names,
+        conversation_history=conversation_history,
+    )
+
+    response = service_manager.llm_service.generate(messages)
+    answer = response.choices[0].message.content
+
+    parsed_analysis = service_manager.llm_service.parse_compare_analysis(answer, citations)
+
+    viewpoints = []
+    for vp in parsed_analysis.get("viewpoints", []):
+        viewpoints.append(schemas.CompareViewpoint(**vp))
+
+    analysis = schemas.CompareAnalysis(
+        viewpoints=viewpoints,
+        summary=parsed_analysis.get("summary", "对比分析完成")
+    )
+
+    retrieval_scores = []
+    for kb_id, (results, _) in retrieval_results_map.items():
+        for r in results:
+            retrieval_scores.append(r.get("rerank_score") or r.get("rrf_score") or 0)
+
+    evaluation = service_manager.evaluation_service.evaluate(
+        question=request.question,
+        answer=answer,
+        context_chunks=[r for kb_id, (results, _) in retrieval_results_map.items() for r in results],
+        retrieval_scores=retrieval_scores,
+    )
+
+    response_time = time.time() - start_time
+
+    assistant_message = models.Message(
+        conversation_id=conv.id,
+        role="assistant",
+        content=answer,
+        citations=citations,
+        retrieval_debug={kb_id: debug for kb_id, (_, debug) in retrieval_results_map.items()},
+        evaluation=evaluation,
+        response_time=response_time,
+    )
+    db.add(assistant_message)
+    db.commit()
+
+    return schemas.CompareChatResponse(
+        answer=answer,
+        conversation_id=conv.id,
+        kb_results=kb_results_list,
+        analysis=analysis,
+        citations=citations,
+        evaluation=evaluation,
+    )
+
+
+@router.post("/visualization")
+def get_visualization_data(
+    request: schemas.ChatRequest,
+    db: Session = Depends(get_db)
+):
+    knowledge_base_id = request.knowledge_base_id
+    if not knowledge_base_id:
+        raise HTTPException(status_code=400, detail="需要指定知识库ID")
+
+    if request.strategy:
+        strategy_dict = request.strategy.model_dump()
+        retrieval_results, retrieval_debug = service_manager.retrieval_service.search_with_strategy(
+            knowledge_base_id=knowledge_base_id,
+            query=request.question,
+            strategy=strategy_dict
+        )
+    else:
+        retrieval_results, retrieval_debug = service_manager.retrieval_service.hybrid_search(
+            knowledge_base_id=knowledge_base_id,
+            query=request.question,
+            top_k=request.top_k,
+            rerank_n=request.rerank_n,
+        )
+
+    for result in retrieval_results:
+        doc = db.query(models.Document).filter(
+            models.Document.id == result.get("document_id")
+        ).first()
+        if doc:
+            result["document_title"] = doc.title
+
+    vis_data = service_manager.retrieval_service.get_visualization_data(
+        knowledge_base_id=knowledge_base_id,
+        query=request.question,
+        retrieval_results=retrieval_results,
+    )
+
+    return {
+        "visualization": vis_data,
+        "retrieval_debug": retrieval_debug,
+        "retrieval_results": retrieval_results
+    }
+
+
+@router.post("/ab-compare", response_model=schemas.ABCompareResponse)
+async def chat_ab_compare(
+    request: schemas.ABCompareRequest,
+    db: Session = Depends(get_db)
+):
+    knowledge_base_id = request.knowledge_base_id
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == knowledge_base_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    if request.conversation_id:
+        conv = db.query(models.Conversation).filter(
+            models.Conversation.id == request.conversation_id
+        ).first()
+        if not conv:
+            raise HTTPException(status_code=404, detail="会话不存在")
+    else:
+        conv = models.Conversation(
+            knowledge_base_id=knowledge_base_id,
+        )
+        db.add(conv)
+        db.flush()
+        db.refresh(conv)
+
+    user_message = models.Message(
+        conversation_id=conv.id,
+        role="user",
+        content=f"[A/B对比] {request.question}",
+    )
+    db.add(user_message)
+    db.flush()
+
+    conv_service = ConversationService(db, service_manager.llm_service)
+    conversation_history = conv_service.get_conversation_history(conv.id)
+
+    async def run_strategy(strategy_config: Dict[str, Any], strategy_name: str) -> schemas.StrategyResult:
+        loop = asyncio.get_event_loop()
+
+        start_time = time.time()
+        retrieval_results, retrieval_debug = await loop.run_in_executor(
+            None,
+            lambda: service_manager.retrieval_service.search_with_strategy(
+                knowledge_base_id=knowledge_base_id,
+                query=request.question,
+                strategy=strategy_config
+            )
+        )
+        retrieval_time_ms = (time.time() - start_time) * 1000
+
+        for result in retrieval_results:
+            doc = db.query(models.Document).filter(
+                models.Document.id == result.get("document_id")
+            ).first()
+            if doc:
+                result["document_title"] = doc.title
+
+        context, citations = service_manager.llm_service.build_context(retrieval_results)
+
+        messages = service_manager.llm_service.build_prompt(
+            question=request.question,
+            context=context,
+            conversation_history=conversation_history,
+        )
+
+        response = service_manager.llm_service.generate(messages)
+        answer = response.choices[0].message.content
+
+        formatted = service_manager.llm_service.format_answer_with_citations(answer, citations)
+
+        formatted_results = []
+        for r in retrieval_results:
+            formatted_results.append(schemas.RetrievalResult(
+                chunk_id=r.get("chunk_id", 0),
+                document_id=r.get("document_id", 0),
+                document_title=r.get("document_title", "Unknown"),
+                chunk_index=r.get("chunk_index", 0),
+                content=r.get("content", ""),
+                page_number=r.get("page_number"),
+                semantic_score=r.get("semantic_score"),
+                bm25_score=r.get("bm25_score"),
+                rrf_score=r.get("rrf_score"),
+                rerank_score=r.get("rerank_score"),
+            ))
+
+        retrieval_scores = [r.get("rerank_score") or r.get("rrf_score") or 0 for r in retrieval_results]
+        final_score = max(retrieval_scores) if retrieval_scores else 0
+
+        return schemas.StrategyResult(
+            strategy_name=strategy_name,
+            strategy_config=schemas.RetrievalStrategy(**strategy_config),
+            retrieval_time_ms=retrieval_time_ms,
+            chunk_count=len(retrieval_results),
+            final_score=float(final_score),
+            retrieval_results=formatted_results,
+            retrieval_debug=retrieval_debug,
+            answer=formatted["answer"],
+            citations=formatted["citations"],
+        )
+
+    strategy_a_dict = request.strategy_a.model_dump()
+    strategy_b_dict = request.strategy_b.model_dump()
+
+    result_a, result_b = await asyncio.gather(
+        run_strategy(strategy_a_dict, "策略A"),
+        run_strategy(strategy_b_dict, "策略B")
+    )
+
+    assistant_content = f"### A/B策略对比结果\n\n**策略A:** {request.strategy_a.model_dump_json()}\n**策略B:** {request.strategy_b.model_dump_json()}\n\n请查看下方对比面板查看详细结果"
+    assistant_message = models.Message(
+        conversation_id=conv.id,
+        role="assistant",
+        content=assistant_content,
+        retrieval_debug={
+            "strategy_a": result_a.retrieval_debug,
+            "strategy_b": result_b.retrieval_debug
+        },
+        response_time=0,
+    )
+    db.add(assistant_message)
+    db.commit()
+
+    return schemas.ABCompareResponse(
+        conversation_id=conv.id,
+        strategy_a=result_a,
+        strategy_b=result_b,
+        question=request.question,
+    )

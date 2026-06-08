@@ -18,11 +18,87 @@
         </div>
         <div class="message-content">
           <div class="message-bubble" v-if="msg.role === 'user'">
+            <div class="msg-meta" v-if="msg.is_compare">
+              <el-tag size="small" type="warning">
+                <el-icon><Scale /></el-icon>
+                对比模式
+              </el-tag>
+              <span class="kb-list">
+                <el-tag
+                  v-for="kbId in msg.compare_kb_ids"
+                  :key="kbId"
+                  size="small"
+                  type="info"
+                  class="kb-tag"
+                >
+                  {{ getKbName(kbId) }}
+                </el-tag>
+              </span>
+            </div>
             {{ msg.content }}
           </div>
           <div class="message-bubble assistant-bubble" v-else>
-            <div class="message-text" v-html="formatMessageContent(msg.content)"></div>
-            
+            <div v-if="msg.is_compare && msg.compare_results" class="compare-results">
+              <div class="compare-header">
+                <el-tag type="warning" size="small">
+                  <el-icon><Scale /></el-icon>
+                  多知识库对比分析
+                </el-tag>
+              </div>
+
+              <el-tabs v-model="activeCompareTab">
+                <el-tab-pane label="对比分析" name="analysis">
+                  <div class="answer-content" v-html="formatMessageContent(msg.content)"></div>
+
+                  <div v-if="msg.compare_results.analysis?.viewpoints?.length" class="viewpoints-section">
+                    <h4>观点来源追踪</h4>
+                    <div
+                      v-for="(vp, idx) in msg.compare_results.analysis.viewpoints"
+                      :key="idx"
+                      class="viewpoint-item"
+                    >
+                      <el-tag size="small" :type="getKbTagType(vp.knowledge_base_id)">
+                        {{ vp.knowledge_base_name }}
+                      </el-tag>
+                      <span class="viewpoint-doc">
+                        {{ vp.document_title }}
+                        <span v-if="vp.page_number">(p.{{ vp.page_number }})</span>
+                      </span>
+                    </div>
+                  </div>
+                </el-tab-pane>
+
+                <el-tab-pane
+                  v-for="kb in msg.compare_results.kb_results"
+                  :key="kb.knowledge_base_id"
+                  :label="`${kb.knowledge_base_name}检索结果`"
+                  :name="`kb-${kb.knowledge_base_id}`"
+                >
+                  <div class="kb-retrieval-section">
+                    <el-table :data="kb.retrieval_results" size="small">
+                      <el-table-column prop="chunk_index" label="块索引" width="80" />
+                      <el-table-column prop="document_title" label="文档" width="150" />
+                      <el-table-column prop="content" label="内容" show-overflow-tooltip />
+                      <el-table-column label="得分" width="200">
+                        <template #default="{ row }">
+                          <div class="score-row">
+                            <span class="score-item">
+                              语义: {{ (row.semantic_score || 0).toFixed(3) }}
+                            </span>
+                            <span class="score-item">
+                              重排: {{ (row.rerank_score || 0).toFixed(3) }}
+                            </span>
+                          </div>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </div>
+                </el-tab-pane>
+              </el-tabs>
+            </div>
+
+            <div v-else class="message-text" v-html="formatMessageContent(msg.content)"></div>
+
             <div v-if="msg.citations && msg.citations.length > 0" class="citations-section">
               <div class="citations-title">引用来源:</div>
               <div
@@ -32,6 +108,7 @@
                 @click="showCitationDetail(cite)"
               >
                 <span class="cite-index">[{{ cite.index }}]</span>
+                <span v-if="cite.kb_name" class="cite-kb">{{ cite.kb_name }}</span>
                 <span class="cite-doc">{{ cite.document_title }}</span>
                 <span class="cite-page" v-if="cite.page_number">p.{{ cite.page_number }}</span>
               </div>
@@ -58,6 +135,16 @@
               </el-tooltip>
               <el-button size="small" text type="primary" @click="showDebugPanel(msg)">
                 调试信息
+              </el-button>
+              <el-button
+                v-if="!msg.is_compare"
+                size="small"
+                text
+                type="success"
+                @click="loadVisualization(msg)"
+              >
+                <el-icon><DataAnalysis /></el-icon>
+                可视化
               </el-button>
             </div>
           </div>
@@ -92,20 +179,57 @@
           <el-option :label="10" :value="10" />
           <el-option :label="20" :value="20" />
         </el-select>
+
+        <el-divider direction="vertical" />
+
+        <el-tooltip content="对比模式">
+          <el-checkbox v-model="compareModeEnabled">
+            <el-icon><Scale /></el-icon>
+            <span>对比模式</span>
+          </el-checkbox>
+        </el-tooltip>
+
+        <el-select
+          v-if="compareModeEnabled"
+          v-model="selectedCompareKbIds"
+          multiple
+          size="small"
+          placeholder="选择2-3个知识库"
+          style="min-width: 200px; max-width: 350px;"
+        >
+          <el-option
+            v-for="kb in store.knowledgeBases"
+            :key="kb.id"
+            :label="kb.name"
+            :value="kb.id"
+          />
+        </el-select>
+
+        <el-tooltip content="A/B策略对比">
+          <el-button size="small" :disabled="!store.currentKnowledgeBaseId" @click="showABCompare = true">
+            <el-icon><Histogram /></el-icon>
+            A/B对比
+          </el-button>
+        </el-tooltip>
       </div>
+
       <el-input
         v-model="question"
         type="textarea"
         :rows="2"
-        placeholder="请输入您的问题..."
+        :placeholder="compareModeEnabled ? '请输入对比问题（将从选中的多个知识库检索并对比分析）...' : '请输入您的问题...'"
         @keydown.enter.ctrl="sendMessage"
         resize="none"
       />
       <div class="input-actions">
         <span class="hint">Ctrl + Enter 发送</span>
+        <span v-if="compareModeEnabled" class="mode-hint">
+          <el-tag size="small" type="warning">对比模式</el-tag>
+          已选择 {{ selectedCompareKbIds.length }}/3 个知识库
+        </span>
         <el-button type="primary" :loading="isSending" @click="sendMessage">
           <el-icon><Promotion /></el-icon>
-          发送
+          {{ compareModeEnabled ? '发送对比' : '发送' }}
         </el-button>
       </div>
     </div>
@@ -117,9 +241,9 @@
             <el-table-column prop="chunk_id" label="Chunk ID" width="80" />
             <el-table-column prop="document_title" label="文档" width="150" />
             <el-table-column prop="content" label="内容" show-overflow-tooltip />
-            <el-table-column prop="semantic_score" label="语义得分" width="100">
+            <el-table-column prop="score" label="语义得分" width="100">
               <template #default="{ row }">
-                {{ row.semantic_score?.toFixed(4) }}
+                {{ row.score?.toFixed(4) }}
               </template>
             </el-table-column>
           </el-table>
@@ -129,9 +253,9 @@
             <el-table-column prop="chunk_id" label="Chunk ID" width="80" />
             <el-table-column prop="document_title" label="文档" width="150" />
             <el-table-column prop="content" label="内容" show-overflow-tooltip />
-            <el-table-column prop="bm25_score" label="BM25得分" width="100">
+            <el-table-column prop="score" label="BM25得分" width="100">
               <template #default="{ row }">
-                {{ row.bm25_score?.toFixed(4) }}
+                {{ row.score?.toFixed(4) }}
               </template>
             </el-table-column>
           </el-table>
@@ -140,9 +264,9 @@
           <el-table :data="currentDebugMsg.retrieval_debug?.rrf_fusion || []" size="small">
             <el-table-column prop="chunk_id" label="Chunk ID" width="80" />
             <el-table-column prop="document_title" label="文档" width="150" />
-            <el-table-column prop="rrf_score" label="RRF得分" width="100">
+            <el-table-column prop="score" label="RRF得分" width="100">
               <template #default="{ row }">
-                {{ row.rrf_score?.toFixed(4) }}
+                {{ row.score?.toFixed(4) }}
               </template>
             </el-table-column>
           </el-table>
@@ -152,19 +276,34 @@
             <el-table-column prop="chunk_id" label="Chunk ID" width="80" />
             <el-table-column prop="document_title" label="文档" width="150" />
             <el-table-column prop="content" label="内容" show-overflow-tooltip />
-            <el-table-column prop="rerank_score" label="重排得分" width="100">
+            <el-table-column prop="score" label="重排得分" width="100">
               <template #default="{ row }">
-                {{ row.rerank_score?.toFixed(4) }}
+                {{ row.score?.toFixed(4) }}
               </template>
             </el-table-column>
           </el-table>
         </el-tab-pane>
+        <el-tab-pane label="可视化" name="visualization" v-if="visualizationData">
+          <RetrievalVisualization :data="visualizationData" />
+        </el-tab-pane>
       </el-tabs>
+    </el-dialog>
+
+    <el-dialog v-model="showABCompare" title="检索策略A/B对比" width="1000px" :close-on-click-modal="false">
+      <ABComparePanel
+        :knowledge-base-id="store.currentKnowledgeBaseId || 0"
+        :conversation-id="store.currentConversationId || undefined"
+        @cancel="showABCompare = false"
+        @result="handleABCompareResult"
+      />
     </el-dialog>
 
     <el-dialog v-model="citationDialogVisible" title="引用详情" width="700px">
       <div v-if="currentCitation">
         <el-descriptions :column="1" border>
+          <el-descriptions-item label="知识库" v-if="currentCitation.kb_name">
+            {{ currentCitation.kb_name }}
+          </el-descriptions-item>
           <el-descriptions-item label="文档">
             {{ currentCitation.document_title }}
           </el-descriptions-item>
@@ -194,11 +333,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores'
 import { chatApi } from '@/api'
-import type { Message, Citation } from '@/types'
+import type { Message, Citation, KnowledgeBaseRetrievalResult, VisualizationData, CompareChatResponse } from '@/types'
+import RetrievalVisualization from '@/components/RetrievalVisualization.vue'
+import ABComparePanel from '@/components/ABComparePanel.vue'
 
 const store = useAppStore()
 const messagesContainer = ref<HTMLElement | null>(null)
@@ -211,6 +352,25 @@ const debugPanelVisible = ref(false)
 const citationDialogVisible = ref(false)
 const currentDebugMsg = ref<Message | null>(null)
 const currentCitation = ref<Citation | null>(null)
+const showABCompare = ref(false)
+const visualizationData = ref<VisualizationData | null>(null)
+const activeCompareTab = ref('analysis')
+
+const compareModeEnabled = ref(false)
+const selectedCompareKbIds = ref<number[]>([])
+
+const kbTagColors = ['#5470c6', '#91cc75', '#fac858']
+
+function getKbName(kbId: number): string {
+  const kb = store.knowledgeBases.find(k => k.id === kbId)
+  return kb?.name || `知识库${kbId}`
+}
+
+function getKbTagType(kbId: number): string {
+  const idx = selectedCompareKbIds.value.indexOf(kbId)
+  const types = ['', 'success', 'warning', 'danger', 'info']
+  return types[(idx + 1) % types.length] || ''
+}
 
 watch(() => store.messages, () => {
   nextTick(() => {
@@ -230,7 +390,7 @@ function formatTime(dateStr: string) {
 }
 
 function formatMessageContent(content: string) {
-  return content.replace(/\[(\d+)\]/g, '<span class="citation-link" data-index="$1">[$1]</span>')
+  return content.replace(/\[(\d+)\](?:\[([^\]]+)\])?/g, '<span class="citation-link" data-index="$1">[$1]$2</span>')
 }
 
 function getMetricColor(value: number) {
@@ -249,13 +409,122 @@ function showCitationDetail(cite: Citation) {
   citationDialogVisible.value = true
 }
 
+async function loadVisualization(msg: Message) {
+  if (!store.currentKnowledgeBaseId) return
+
+  try {
+    const userQuestion = getQuestionForMessage(msg)
+    if (!userQuestion) return
+
+    const res = await chatApi.getVisualization({
+      question: userQuestion,
+      knowledge_base_id: store.currentKnowledgeBaseId,
+      top_k: topK.value
+    })
+
+    visualizationData.value = res.data.visualization
+    currentDebugMsg.value = msg
+    debugPanelVisible.value = true
+  } catch (e) {
+    ElMessage.error('加载可视化数据失败')
+    console.error(e)
+  }
+}
+
+function getQuestionForMessage(msg: Message): string | null {
+  const msgIndex = store.messages.findIndex(m => m.id === msg.id)
+  if (msgIndex > 0) {
+    const prevMsg = store.messages[msgIndex - 1]
+    if (prevMsg.role === 'user') {
+      return prevMsg.content
+    }
+  }
+  return null
+}
+
+function handleABCompareResult(result: any) {
+  showABCompare.value = false
+  ElMessage.success('A/B对比完成')
+}
+
 async function sendMessage() {
   if (!question.value.trim()) return
-  if (!store.currentKnowledgeBaseId) {
-    ElMessage.warning('请先选择知识库')
-    return
-  }
 
+  if (compareModeEnabled.value) {
+    if (selectedCompareKbIds.value.length < 2 || selectedCompareKbIds.value.length > 3) {
+      ElMessage.warning('对比模式需要选择2-3个知识库')
+      return
+    }
+    await sendCompareMessage()
+  } else {
+    if (!store.currentKnowledgeBaseId) {
+      ElMessage.warning('请先选择知识库')
+      return
+    }
+    await sendNormalMessage()
+  }
+}
+
+async function sendCompareMessage() {
+  const userQuestion = question.value.trim()
+  question.value = ''
+  isSending.value = true
+
+  const userMsg: any = {
+    id: Date.now(),
+    conversation_id: store.currentConversationId || 0,
+    role: 'user',
+    content: userQuestion,
+    created_at: new Date().toISOString(),
+    is_compare: true,
+    compare_kb_ids: [...selectedCompareKbIds.value]
+  }
+  store.addMessage(userMsg)
+
+  try {
+    isTyping.value = true
+
+    const res = await chatApi.sendCompareMessage({
+      question: userQuestion,
+      knowledge_base_ids: selectedCompareKbIds.value,
+      conversation_id: store.currentConversationId || undefined,
+      top_k: topK.value,
+      stream: false
+    })
+
+    const compareData = res.data as CompareChatResponse
+
+    const assistantMsg: any = {
+      id: Date.now() + 1,
+      conversation_id: compareData.conversation_id,
+      role: 'assistant',
+      content: compareData.answer,
+      citations: compareData.citations,
+      retrieval_debug: {},
+      evaluation: compareData.evaluation,
+      created_at: new Date().toISOString(),
+      is_compare: true,
+      compare_results: {
+        kb_results: compareData.kb_results,
+        analysis: compareData.analysis
+      }
+    }
+    store.addMessage(assistantMsg)
+
+    if (!store.currentConversationId) {
+      store.currentConversationId = compareData.conversation_id
+      await store.loadConversations()
+    }
+  } catch (e) {
+    ElMessage.error('对比问答失败')
+    console.error(e)
+  } finally {
+    isSending.value = false
+    isTyping.value = false
+  }
+}
+
+async function sendNormalMessage() {
   const userQuestion = question.value.trim()
   question.value = ''
   isSending.value = true
@@ -290,7 +559,7 @@ async function sendMessage() {
     if (streamEnabled.value) {
       await sendStreamMessage(userQuestion)
     } else {
-      await sendNormalMessage(userQuestion)
+      await sendNormalApiMessage(userQuestion)
     }
   } catch (e) {
     ElMessage.error('发送消息失败')
@@ -301,7 +570,7 @@ async function sendMessage() {
   }
 }
 
-async function sendNormalMessage(questionText: string) {
+async function sendNormalApiMessage(questionText: string) {
   const res = await chatApi.sendMessage({
     question: questionText,
     conversation_id: store.currentConversationId || undefined,
@@ -465,7 +734,7 @@ async function sendStreamMessage(questionText: string) {
 .message-content {
   display: flex;
   flex-direction: column;
-  max-width: 70%;
+  max-width: 75%;
 }
 
 .message-bubble {
@@ -480,11 +749,107 @@ async function sendStreamMessage(questionText: string) {
   border: 1px solid #e4e7ed;
 }
 
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+
+  .kb-list {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .kb-tag {
+    font-size: 11px;
+  }
+}
+
 .message-text {
   :deep(.citation-link) {
     color: #409eff;
     cursor: pointer;
     text-decoration: underline;
+  }
+}
+
+.answer-content {
+  line-height: 1.8;
+  color: #303133;
+
+  :deep(.citation-link) {
+    color: #409eff;
+    cursor: pointer;
+  }
+
+  :deep(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 13px;
+
+    th, td {
+      border: 1px solid #e4e7ed;
+      padding: 8px 12px;
+      text-align: left;
+    }
+
+    th {
+      background: #f5f7fa;
+      font-weight: 600;
+    }
+  }
+}
+
+.compare-results {
+  .compare-header {
+    margin-bottom: 12px;
+  }
+}
+
+.compare-results :deep(.el-tabs__content) {
+  padding-top: 12px;
+}
+
+.viewpoints-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+
+  h4 {
+    margin: 0 0 12px 0;
+    color: #606266;
+    font-size: 14px;
+  }
+}
+
+.viewpoint-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+
+  .viewpoint-doc {
+    color: #606266;
+  }
+}
+
+.kb-retrieval-section {
+  .score-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+
+    .score-item {
+      color: #606266;
+    }
   }
 }
 
@@ -560,6 +925,14 @@ async function sendStreamMessage(questionText: string) {
       font-weight: 600;
     }
 
+    .cite-kb {
+      color: #67c23a;
+      font-size: 12px;
+      padding: 0 4px;
+      background: #f0f9eb;
+      border-radius: 3px;
+    }
+
     .cite-doc {
       flex: 1;
       color: #606266;
@@ -577,6 +950,7 @@ async function sendStreamMessage(questionText: string) {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 
   .metric-tag {
     display: flex;
@@ -595,6 +969,7 @@ async function sendStreamMessage(questionText: string) {
     gap: 12px;
     margin-bottom: 8px;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .input-actions {
@@ -605,6 +980,14 @@ async function sendStreamMessage(questionText: string) {
 
     .hint {
       color: #c0c4cc;
+      font-size: 12px;
+    }
+
+    .mode-hint {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #606266;
       font-size: 12px;
     }
   }
