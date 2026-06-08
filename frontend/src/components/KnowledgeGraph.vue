@@ -110,6 +110,13 @@
         <div class="spinner"></div>
         <p>正在加载图谱数据...</p>
       </div>
+
+      <div v-else-if="!graphData?.nodes?.length" class="empty-overlay">
+        <div class="empty-icon">🕸️</div>
+        <h3>暂无图谱数据</h3>
+        <p>该知识库尚未构建知识图谱</p>
+        <p class="empty-hint">请先上传并解析文档，系统将自动提取实体和关系构建知识图谱</p>
+      </div>
     </div>
 
     <div v-if="selectedNode" class="entity-detail-panel">
@@ -403,15 +410,68 @@ const toggleEditMode = () => {
 const loadGraphData = async () => {
   loading.value = true
   try {
-    graphData.value = await graphApi.getGraphData(props.knowledgeBaseId, {
+    const response = await graphApi.getGraphData(props.knowledgeBaseId, {
       filter_entity_types: selectedTypes.value.length < 5 ? selectedTypes.value : undefined
     })
-    if (graphData.value) {
+    
+    if (response && typeof response === 'object') {
+      graphData.value = {
+        nodes: Array.isArray(response.nodes) ? response.nodes : [],
+        edges: Array.isArray(response.edges) ? response.edges : [],
+        stats: response.stats || {
+          entity_count: 0,
+          relation_count: 0,
+          connected_components: 0,
+          community_count: 0,
+          avg_degree: 0,
+          max_degree: 0,
+          entity_types_distribution: {},
+          relation_types_distribution: {},
+          build_status: 'pending',
+          build_progress: 0,
+          last_built_at: null
+        }
+      }
       runForceSimulation()
       emit('graph-loaded', graphData.value)
+    } else {
+      graphData.value = {
+        nodes: [],
+        edges: [],
+        stats: {
+          entity_count: 0,
+          relation_count: 0,
+          connected_components: 0,
+          community_count: 0,
+          avg_degree: 0,
+          max_degree: 0,
+          entity_types_distribution: {},
+          relation_types_distribution: {},
+          build_status: 'pending',
+          build_progress: 0,
+          last_built_at: null
+        }
+      }
     }
   } catch (e) {
     console.error('Failed to load graph data:', e)
+    graphData.value = {
+      nodes: [],
+      edges: [],
+      stats: {
+        entity_count: 0,
+        relation_count: 0,
+        connected_components: 0,
+        community_count: 0,
+        avg_degree: 0,
+        max_degree: 0,
+        entity_types_distribution: {},
+        relation_types_distribution: {},
+        build_status: 'failed',
+        build_progress: 0,
+        last_built_at: null
+      }
+    }
   } finally {
     loading.value = false
   }
@@ -682,6 +742,43 @@ svg {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.empty-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 10;
+  text-align: center;
+  padding: 24px;
+}
+
+.empty-icon {
+  font-size: 64px;
+  opacity: 0.5;
+}
+
+.empty-overlay h3 {
+  margin: 0;
+  color: #475569;
+  font-size: 20px;
+}
+
+.empty-overlay p {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.empty-overlay .empty-hint {
+  color: #94a3b8;
+  font-size: 13px;
+  max-width: 400px;
 }
 
 .entity-detail-panel {

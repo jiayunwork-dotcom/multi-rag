@@ -28,8 +28,14 @@ class GraphService:
         self._init_neo4j()
 
     def _init_neo4j(self):
+        if not settings.GRAPH_ENABLED:
+            logger.info("Graph feature disabled, skipping Neo4j initialization")
+            self._driver = None
+            return
+
         try:
             uri = f"bolt://{settings.NEO4J_HOST}:{settings.NEO4J_PORT}"
+            logger.info(f"Attempting to connect to Neo4j at {uri}...")
             self._driver = GraphDatabase.driver(
                 uri,
                 auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
@@ -37,17 +43,21 @@ class GraphService:
             self._driver.verify_connectivity()
             logger.info(f"Neo4j connected successfully at {uri}")
         except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
-            raise
+            logger.warning(f"Failed to connect to Neo4j: {e}. Graph features will be disabled.")
+            self._driver = None
+
+    def is_available(self) -> bool:
+        return self._driver is not None
 
     def close(self):
         if self._driver:
             self._driver.close()
             logger.info("Neo4j connection closed")
 
-    def _get_neo4j_session(self) -> Neo4jSession:
+    def _get_neo4j_session(self) -> Optional[Neo4jSession]:
         if not self._driver:
-            raise RuntimeError("Neo4j driver not initialized")
+            logger.warning("Neo4j driver not available, graph operations will be skipped")
+            return None
         return self._driver.session(database=settings.NEO4J_DATABASE)
 
     def _get_entity_label(self, entity_type: str) -> str:
@@ -341,6 +351,10 @@ class GraphService:
         chunk: models.Chunk,
         knowledge_base_id: int
     ) -> Tuple[int, int]:
+        if not self.is_available():
+            logger.warning("Neo4j not available, skipping graph building for chunk")
+            return 0, 0
+
         extraction_result = self.extract_entities_and_relations(
             chunk_text=chunk.content,
             chunk_id=chunk.id,
@@ -449,8 +463,14 @@ class GraphService:
         return new_entity_count, new_relation_count
 
     def _create_neo4j_entity(self, entity: models.GraphEntity):
+        if not self.is_available():
+            logger.warning("Neo4j not available, skipping entity creation in graph database")
+            return
         try:
-            with self._get_neo4j_session() as session:
+            session = self._get_neo4j_session()
+            if not session:
+                return
+            with session:
                 label = self._get_entity_label(entity.entity_type)
                 result = session.run(
                     f"""
@@ -479,8 +499,14 @@ class GraphService:
         target: models.GraphEntity,
         relation: models.GraphRelation
     ):
+        if not self.is_available():
+            logger.warning("Neo4j not available, skipping relation creation in graph database")
+            return
         try:
-            with self._get_neo4j_session() as session:
+            session = self._get_neo4j_session()
+            if not session:
+                return
+            with session:
                 rel_type = self._get_relation_type(relation.relation_type)
                 result = session.run(
                     f"""
@@ -505,8 +531,13 @@ class GraphService:
             logger.error(f"Failed to create Neo4j relation: {e}")
 
     def _update_neo4j_relation_frequency(self, relation: models.GraphRelation):
+        if not self.is_available():
+            return
         try:
-            with self._get_neo4j_session() as session:
+            session = self._get_neo4j_session()
+            if not session:
+                return
+            with session:
                 rel_type = self._get_relation_type(relation.relation_type)
                 session.run(
                     f"""
@@ -729,8 +760,13 @@ class GraphService:
         self._update_kb_graph_stats(db, knowledge_base_id)
 
     def _delete_neo4j_entity(self, entity: models.GraphEntity):
+        if not self.is_available():
+            return
         try:
-            with self._get_neo4j_session() as session:
+            session = self._get_neo4j_session()
+            if not session:
+                return
+            with session:
                 session.run(
                     """
                     MATCH (e {id: $id})
@@ -742,8 +778,13 @@ class GraphService:
             logger.error(f"Failed to delete Neo4j entity: {e}")
 
     def _delete_neo4j_relation(self, relation: models.GraphRelation):
+        if not self.is_available():
+            return
         try:
-            with self._get_neo4j_session() as session:
+            session = self._get_neo4j_session()
+            if not session:
+                return
+            with session:
                 rel_type = self._get_relation_type(relation.relation_type)
                 session.run(
                     f"""
