@@ -249,7 +249,7 @@ async def chat(
 
     if request.strategy:
         strategy_dict = request.strategy.model_dump()
-        retrieval_results, retrieval_debug = service_manager.retrieval_service.search_with_strategy(
+        retrieval_results, retrieval_debug, _ = service_manager.retrieval_service.search_with_strategy(
             knowledge_base_id=knowledge_base_id,
             query=request.question,
             strategy=strategy_dict
@@ -571,7 +571,7 @@ def get_visualization_data(
 
     if request.strategy:
         strategy_dict = request.strategy.model_dump()
-        retrieval_results, retrieval_debug = service_manager.retrieval_service.search_with_strategy(
+        retrieval_results, retrieval_debug, _ = service_manager.retrieval_service.search_with_strategy(
             knowledge_base_id=knowledge_base_id,
             query=request.question,
             strategy=strategy_dict

@@ -208,7 +208,7 @@ class RetrievalService:
         elapsed_ms = (time.time() - start_time) * 1000
         if return_timing:
             return final_results, debug_info, elapsed_ms
-        return final_results, debug_info
+        return final_results, debug_info, None
 
     def _rrf_fusion_with_k(
         self,
@@ -269,7 +269,7 @@ class RetrievalService:
         if not parallel or len(knowledge_base_ids) <= 1:
             for kb_id in knowledge_base_ids:
                 if strategy:
-                    retrieval_results, debug_info = self.search_with_strategy(kb_id, query, strategy)
+                    retrieval_results, debug_info, _ = self.search_with_strategy(kb_id, query, strategy)
                 else:
                     retrieval_results, debug_info = self.hybrid_search(kb_id, query, top_k, rerank_n)
                 results[kb_id] = (retrieval_results, debug_info)
@@ -277,7 +277,7 @@ class RetrievalService:
 
         def _search_kb(kb_id: int) -> Tuple[int, List[Dict[str, Any]], Dict[str, Any]]:
             if strategy:
-                retrieval_results, debug_info = self.search_with_strategy(kb_id, query, strategy)
+                retrieval_results, debug_info, _ = self.search_with_strategy(kb_id, query, strategy)
             else:
                 retrieval_results, debug_info = self.hybrid_search(kb_id, query, top_k, rerank_n)
             return (kb_id, retrieval_results, debug_info)
