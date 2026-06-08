@@ -432,12 +432,17 @@ async def chat_compare(
 
     strategy_dict = request.strategy.model_dump() if request.strategy else None
 
-    retrieval_results_map = service_manager.retrieval_service.search_multiple_kb(
-        knowledge_base_ids=request.knowledge_base_ids,
-        query=request.question,
-        strategy=strategy_dict,
-        top_k=request.top_k,
-        rerank_n=request.rerank_n
+    loop = asyncio.get_event_loop()
+    retrieval_results_map = await loop.run_in_executor(
+        None,
+        lambda: service_manager.retrieval_service.search_multiple_kb(
+            knowledge_base_ids=request.knowledge_base_ids,
+            query=request.question,
+            strategy=strategy_dict,
+            top_k=request.top_k,
+            rerank_n=request.rerank_n,
+            parallel=True
+        )
     )
 
     for kb_id in request.knowledge_base_ids:
@@ -639,16 +644,18 @@ async def chat_ab_compare(
     async def run_strategy(strategy_config: Dict[str, Any], strategy_name: str) -> schemas.StrategyResult:
         loop = asyncio.get_event_loop()
 
-        start_time = time.time()
-        retrieval_results, retrieval_debug = await loop.run_in_executor(
-            None,
-            lambda: service_manager.retrieval_service.search_with_strategy(
+        def _do_search():
+            return service_manager.retrieval_service.search_with_strategy(
                 knowledge_base_id=knowledge_base_id,
                 query=request.question,
-                strategy=strategy_config
+                strategy=strategy_config,
+                return_timing=True
             )
+
+        retrieval_results, retrieval_debug, retrieval_time_ms = await loop.run_in_executor(
+            None,
+            _do_search
         )
-        retrieval_time_ms = (time.time() - start_time) * 1000
 
         for result in retrieval_results:
             doc = db.query(models.Document).filter(

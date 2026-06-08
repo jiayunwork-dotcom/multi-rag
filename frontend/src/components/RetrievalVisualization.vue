@@ -25,21 +25,37 @@
               </span>
             </div>
           </div>
-          <div ref="scatterChartRef" class="scatter-chart"></div>
+          <v-chart
+            v-if="scatterOption"
+            :option="scatterOption"
+            :autoresize="true"
+            class="scatter-chart"
+          />
+          <div v-else class="chart-placeholder">
+            暂无数据
+          </div>
         </div>
       </el-tab-pane>
 
       <el-tab-pane label="检索得分对比" name="bar">
         <div class="chart-container">
           <div class="chart-header">
-            <el-select v-model="sortBy" size="small" style="width: 150px;" @change="updateBarChart">
+            <el-select v-model="sortBy" size="small" style="width: 150px;">
               <el-option label="按重排得分" value="rerank_score" />
               <el-option label="按RRF得分" value="rrf_score" />
               <el-option label="按语义得分" value="semantic_score" />
               <el-option label="按BM25得分" value="bm25_score" />
             </el-select>
           </div>
-          <div ref="barChartRef" class="bar-chart"></div>
+          <v-chart
+            v-if="barOption"
+            :option="barOption"
+            :autoresize="true"
+            class="bar-chart"
+          />
+          <div v-else class="chart-placeholder">
+            暂无数据
+          </div>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -47,9 +63,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
-import * as echarts from 'echarts'
+import { ref, watch, computed, onMounted, markRaw } from 'vue'
 import type { VisualizationData } from '@/types'
+import type { EChartsOption } from 'echarts'
 
 const props = defineProps<{
   data: VisualizationData | null
@@ -57,10 +73,8 @@ const props = defineProps<{
 
 const activeTab = ref('scatter')
 const sortBy = ref('rerank_score')
-const scatterChartRef = ref<HTMLElement | null>(null)
-const barChartRef = ref<HTMLElement | null>(null)
-let scatterChart: echarts.ECharts | null = null
-let barChart: echarts.ECharts | null = null
+const scatterOption = ref<EChartsOption | null>(null)
+const barOption = ref<EChartsOption | null>(null)
 
 const documentColors: Record<number, string> = {}
 const colorPalette = [
@@ -91,10 +105,11 @@ function getDocumentColor(docId: number): string {
   return documentColors[docId]
 }
 
-function initScatterChart() {
-  if (!scatterChartRef.value || !props.data) return
-
-  scatterChart = echarts.init(scatterChartRef.value)
+function buildScatterOption() {
+  if (!props.data) {
+    scatterOption.value = null
+    return
+  }
 
   const series: any[] = []
 
@@ -154,7 +169,7 @@ function initScatterChart() {
     })
   }
 
-  const option = {
+  scatterOption.value = markRaw({
     tooltip: {
       trigger: 'item',
       formatter: (params: any) => {
@@ -205,28 +220,22 @@ function initScatterChart() {
       }
     },
     series
+  })
+}
+
+function buildBarOption() {
+  if (!props.data) {
+    barOption.value = null
+    return
   }
 
-  scatterChart.setOption(option)
-}
-
-function initBarChart() {
-  if (!barChartRef.value || !props.data) return
-
-  barChart = echarts.init(barChartRef.value)
-  updateBarChart()
-}
-
-function updateBarChart() {
-  if (!barChart || !props.data) return
-
   const scoreData = [...props.data.score_data].sort((a, b) => {
-    return (b[sortBy.value] || 0) - (a[sortBy.value] || 0)
+    return (b[sortBy.value as keyof typeof b] || 0) - (a[sortBy.value as keyof typeof a] || 0)
   })
 
   const categories = scoreData.map((d, i) => `Chunk #${d.chunk_index}`)
 
-  const option = {
+  barOption.value = markRaw({
     tooltip: {
       trigger: 'axis',
       axisPointer: {
@@ -298,40 +307,28 @@ function updateBarChart() {
         itemStyle: { color: '#ee6666' }
       }
     ]
-  }
-
-  barChart.setOption(option)
-}
-
-function handleResize() {
-  scatterChart?.resize()
-  barChart?.resize()
+  })
 }
 
 watch(() => props.data, () => {
   if (props.data) {
-    initScatterChart()
-    initBarChart()
+    buildScatterOption()
+    buildBarOption()
+  } else {
+    scatterOption.value = null
+    barOption.value = null
   }
-}, { deep: true })
+}, { deep: true, immediate: true })
 
-watch(activeTab, () => {
-  setTimeout(() => {
-    scatterChart?.resize()
-    barChart?.resize()
-  }, 100)
+watch(sortBy, () => {
+  buildBarOption()
 })
 
 onMounted(() => {
-  initScatterChart()
-  initBarChart()
-  window.addEventListener('resize', handleResize)
-})
-
-onBeforeUnmount(() => {
-  scatterChart?.dispose()
-  barChart?.dispose()
-  window.removeEventListener('resize', handleResize)
+  if (props.data) {
+    buildScatterOption()
+    buildBarOption()
+  }
 })
 </script>
 
@@ -384,5 +381,15 @@ onBeforeUnmount(() => {
 .bar-chart {
   width: 100%;
   height: 380px;
+}
+
+.chart-placeholder {
+  width: 100%;
+  height: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  font-size: 14px;
 }
 </style>

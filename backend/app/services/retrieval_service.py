@@ -1,5 +1,8 @@
 from typing import List, Dict, Any, Optional, Tuple
 import logging
+import time
+import asyncio
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from collections import defaultdict
 import numpy as np
 from sklearn.decomposition import PCA
@@ -151,8 +154,10 @@ class RetrievalService:
         self,
         knowledge_base_id: int,
         query: str,
-        strategy: Dict[str, Any]
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        strategy: Dict[str, Any],
+        return_timing: bool = False
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[float]]:
+        start_time = time.time()
         debug_info = {}
         query_embedding = self.embedding_service.encode_text(query)
 
@@ -200,6 +205,9 @@ class RetrievalService:
             final_results = fused_results[:rerank_n] if len(fused_results) > rerank_n else fused_results
             debug_info["reranked"] = []
 
+        elapsed_ms = (time.time() - start_time) * 1000
+        if return_timing:
+            return final_results, debug_info, elapsed_ms
         return final_results, debug_info
 
     def _rrf_fusion_with_k(
@@ -253,15 +261,33 @@ class RetrievalService:
         query: str,
         strategy: Optional[Dict[str, Any]] = None,
         top_k: int = 10,
-        rerank_n: int = 5
+        rerank_n: int = 5,
+        parallel: bool = True
     ) -> Dict[int, Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
         results = {}
-        for kb_id in knowledge_base_ids:
+        
+        if not parallel or len(knowledge_base_ids) <= 1:
+            for kb_id in knowledge_base_ids:
+                if strategy:
+                    retrieval_results, debug_info = self.search_with_strategy(kb_id, query, strategy)
+                else:
+                    retrieval_results, debug_info = self.hybrid_search(kb_id, query, top_k, rerank_n)
+                results[kb_id] = (retrieval_results, debug_info)
+            return results
+
+        def _search_kb(kb_id: int) -> Tuple[int, List[Dict[str, Any]], Dict[str, Any]]:
             if strategy:
                 retrieval_results, debug_info = self.search_with_strategy(kb_id, query, strategy)
             else:
                 retrieval_results, debug_info = self.hybrid_search(kb_id, query, top_k, rerank_n)
-            results[kb_id] = (retrieval_results, debug_info)
+            return (kb_id, retrieval_results, debug_info)
+
+        with ThreadPoolExecutor(max_workers=min(len(knowledge_base_ids), 4)) as executor:
+            futures = [executor.submit(_search_kb, kb_id) for kb_id in knowledge_base_ids]
+            for future in futures:
+                kb_id, retrieval_results, debug_info = future.result()
+                results[kb_id] = (retrieval_results, debug_info)
+        
         return results
 
     def get_visualization_data(
