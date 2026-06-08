@@ -310,6 +310,7 @@ class ServiceManager:
         self.bm25_index = BM25Index()
 
         from .retrieval_service import RetrievalService
+        from .evaluation_service import EvaluationService
         self.retrieval_service = RetrievalService(
             self.vector_store,
             self.bm25_index,
