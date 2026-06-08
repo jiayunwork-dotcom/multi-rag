@@ -7,7 +7,11 @@ import type {
   GraphStats, GraphData, GraphEntity, GraphEntityDetail, GraphRelation,
   GraphEntityCreate, GraphEntityUpdate, GraphRelationCreate, GraphRelationUpdate,
   GraphBuildRequest, GraphBuildProgress, GraphQueryRequest, GraphQueryResult, GraphQueryDebug,
-  ChatGraphRequest, ChatGraphResponse
+  ChatGraphRequest, ChatGraphResponse,
+  GraphVersionBase, GraphVersion, GraphVersionDiff, GraphVersionCompareRequest,
+  GraphMergePreview, GraphMergeRequest, GraphMergeResult,
+  GraphQLQueryRequest, GraphQLQueryResult,
+  GraphQLAutocompleteResult, GraphQueryHistoryResponse
 } from '@/types'
 
 export const knowledgeBaseApi = {
@@ -122,7 +126,31 @@ export const graphApi = {
   exportGraph: (kbId: number) =>
     api.get(`/knowledge-graph/${kbId}/export`, { responseType: 'blob' }),
   clearGraph: (kbId: number) =>
-    api.delete(`/knowledge-graph/${kbId}/clear`)
+    api.delete(`/knowledge-graph/${kbId}/clear`),
+
+  listVersions: (kbId: number, params?: { skip?: number; limit?: number }) =>
+    api.get<GraphVersionBase[]>(`/knowledge-graph/${kbId}/versions`, { params }),
+  getVersion: (versionId: number) =>
+    api.get<GraphVersion>(`/knowledge-graph/versions/${versionId}`),
+  createVersion: (kbId: number, data?: { description?: string }) =>
+    api.post<GraphVersionBase>(`/knowledge-graph/${kbId}/versions/create`, data),
+  compareVersions: (kbId: number, data: GraphVersionCompareRequest) =>
+    api.post<GraphVersionDiff>(`/knowledge-graph/${kbId}/versions/compare`, data),
+
+  previewMerge: (data: GraphMergeRequest) =>
+    api.post<GraphMergePreview>('/knowledge-graph/merge/preview', data),
+  executeMerge: (data: GraphMergeRequest) =>
+    api.post<GraphMergeResult>('/knowledge-graph/merge/execute', data),
+
+  executeAdvancedQuery: (data: GraphQLQueryRequest) =>
+    api.post<GraphQLQueryResult>('/knowledge-graph/query/advanced', data),
+  getQueryHistory: (kbId: number) =>
+    api.get<GraphQueryHistoryResponse>(`/knowledge-graph/${kbId}/query/history`),
+  getQueryAutocomplete: (kbId: number, prefix: string, limit?: number) =>
+    api.get<GraphQLAutocompleteResult>(`/knowledge-graph/${kbId}/query/autocomplete`, { params: { prefix, limit } }),
+
+  listAllKnowledgeBases: () =>
+    api.get<KnowledgeBase[]>('/knowledge-graph/knowledge-bases/all')
 }
 
 export const adminApi = {

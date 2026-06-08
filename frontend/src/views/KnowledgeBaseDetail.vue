@@ -229,14 +229,54 @@
                 <el-icon><Download /></el-icon>
                 导出图谱
               </el-button>
+              <el-button @click="clearHighlights" v-if="hasHighlights">
+                <el-icon><Close /></el-icon>
+                清除高亮
+              </el-button>
             </div>
           </div>
 
-          <div class="graph-visualization">
-            <KnowledgeGraph
-              :knowledge-base-id="kbId"
-              @graph-loaded="onGraphLoaded"
-            />
+          <div class="graph-main-area">
+            <el-tabs v-model="activeGraphSubTab" class="graph-sub-tabs">
+              <el-tab-pane label="图谱可视化" name="visualization">
+                <div class="graph-layout">
+                  <GraphVersionPanel
+                    ref="versionPanelRef"
+                    :knowledge-base-id="kbId"
+                    @comparison-changed="onComparisonChanged"
+                    @highlight-changed="onVersionHighlightChanged"
+                  />
+
+                  <div class="graph-center">
+                    <KnowledgeGraph
+                      :knowledge-base-id="kbId"
+                      :highlight-added-entity-ids="highlightAddedEntityIds"
+                      :highlight-removed-entity-ids="highlightRemovedEntityIds"
+                      :highlight-node-ids="highlightNodeIds"
+                      :highlight-edge-ids="highlightEdgeIds"
+                      @graph-loaded="onGraphLoaded"
+                    />
+                  </div>
+
+                  <GraphMergePanel
+                    :knowledge-base-id="kbId"
+                    :knowledge-base-name="knowledgeBase?.name"
+                    @merge-complete="onMergeComplete"
+                  />
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="图谱查询" name="query">
+                <div class="query-layout">
+                  <GraphQueryPanel
+                    ref="queryPanelRef"
+                    :knowledge-base-id="kbId"
+                    @highlight-changed="onQueryHighlightChanged"
+                    @entity-selected="onEntitySelected"
+                  />
+                </div>
+              </el-tab-pane>
+            </el-tabs>
           </div>
         </div>
       </el-tab-pane>
@@ -435,13 +475,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles } from 'element-plus'
 import { useAppStore } from '@/stores'
 import { knowledgeBaseApi, documentApi, graphApi } from '@/api'
-import type { KnowledgeBase, Document, ParseTask, Chunk, GraphStats, GraphData } from '@/types'
+import type {
+  KnowledgeBase, Document, ParseTask, Chunk, GraphStats, GraphData,
+  GraphVersionBase, GraphVersionDiff, GraphMergeResult, GraphEntity
+} from '@/types'
 import KnowledgeGraph from '@/components/KnowledgeGraph.vue'
+import GraphVersionPanel from '@/components/GraphVersionPanel.vue'
+import GraphMergePanel from '@/components/GraphMergePanel.vue'
+import GraphQueryPanel from '@/components/GraphQueryPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -455,6 +501,16 @@ const activeTab = ref('documents')
 const filterStatus = ref<string>('')
 
 const graphStats = ref<GraphStats | null>(null)
+
+const highlightAddedEntityIds = ref<Set<string>>(new Set())
+const highlightRemovedEntityIds = ref<Set<string>>(new Set())
+const highlightNodeIds = ref<Set<string>>(new Set())
+const highlightEdgeIds = ref<Set<string>>(new Set())
+
+const versionPanelRef = ref<InstanceType<typeof GraphVersionPanel>>()
+const queryPanelRef = ref<InstanceType<typeof GraphQueryPanel>>()
+
+const activeGraphSubTab = ref<'visualization' | 'query'>('visualization')
 
 const showUploadDialog = ref(false)
 const uploading = ref(false)
@@ -839,6 +895,73 @@ async function exportGraph() {
 function onGraphLoaded(data: GraphData) {
   loadGraphStats()
 }
+
+const hasHighlights = computed(() => {
+  return highlightAddedEntityIds.value.size > 0 ||
+    highlightRemovedEntityIds.value.size > 0 ||
+    highlightNodeIds.value.size > 0 ||
+    highlightEdgeIds.value.size > 0
+})
+
+function clearHighlights() {
+  highlightAddedEntityIds.value = new Set()
+  highlightRemovedEntityIds.value = new Set()
+  highlightNodeIds.value = new Set()
+  highlightEdgeIds.value = new Set()
+  versionPanelRef.value?.clearComparison()
+  queryPanelRef.value?.clearHighlight()
+}
+
+function onVersionHighlightChanged(data: {
+  addedEntityIds: Set<string>
+  removedEntityIds: Set<string>
+}) {
+  highlightAddedEntityIds.value = data.addedEntityIds
+  highlightRemovedEntityIds.value = data.removedEntityIds
+  highlightNodeIds.value = new Set()
+  highlightEdgeIds.value = new Set()
+  if (queryPanelRef.value) {
+    queryPanelRef.value.clearHighlight()
+  }
+}
+
+function onQueryHighlightChanged(data: {
+  nodeIds: Set<string>
+  edgeIds: Set<string>
+}) {
+  highlightNodeIds.value = data.nodeIds
+  highlightEdgeIds.value = data.edgeIds
+  highlightAddedEntityIds.value = new Set()
+  highlightRemovedEntityIds.value = new Set()
+  if (versionPanelRef.value) {
+    versionPanelRef.value.clearComparison()
+  }
+}
+
+function onComparisonChanged(diff: GraphVersionDiff | null) {
+  if (!diff) {
+    clearHighlights()
+  }
+}
+
+function onEntitySelected(entity: GraphEntity) {
+  ElMessage.info(`选中实体: ${entity.name}`)
+}
+
+function onMergeComplete(result: GraphMergeResult) {
+  loadGraphStats()
+  if (versionPanelRef.value) {
+    versionPanelRef.value.loadVersions()
+  }
+}
+
+watch(activeGraphSubTab, (tab) => {
+  if (tab === 'visualization') {
+    if (queryPanelRef.value) {
+      queryPanelRef.value.clearHighlight()
+    }
+  }
+})
 </script>
 
 <style lang="scss" scoped>
@@ -1082,6 +1205,56 @@ function onGraphLoaded(data: GraphData) {
   display: flex;
   gap: 12px;
   margin-bottom: 16px;
+}
+
+.graph-main-area {
+  flex: 1;
+  min-height: 600px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.graph-sub-tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  :deep(.el-tabs__content) {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  :deep(.el-tab-pane) {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+.graph-layout {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.graph-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid #e4e7ed;
+  border-right: 1px solid #e4e7ed;
+}
+
+.graph-center > :deep(.knowledge-graph) {
+  flex: 1;
+  min-height: 100%;
+}
+
+.query-layout {
+  height: 100%;
+  overflow: hidden;
 }
 
 .graph-visualization {

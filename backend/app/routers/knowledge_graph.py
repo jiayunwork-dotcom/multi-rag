@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Background
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import logging
 import asyncio
 
@@ -389,4 +389,206 @@ def clear_graph(kb_id: int, db: Session = Depends(get_db)):
         return None
     except Exception as e:
         logger.error(f"Failed to clear graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{kb_id}/versions", response_model=List[schemas.GraphVersionBase])
+def list_graph_versions(
+    kb_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db)
+):
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == kb_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    try:
+        versions = service_manager.graph_service.list_versions(db, kb_id, skip, limit)
+        return versions
+    except Exception as e:
+        logger.error(f"Failed to list graph versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/versions/{version_id}", response_model=schemas.GraphVersion)
+def get_graph_version(version_id: int, db: Session = Depends(get_db)):
+    try:
+        version = service_manager.graph_service.get_version_with_snapshots(db, version_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        return version
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to get graph version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{kb_id}/versions/create", response_model=schemas.GraphVersionBase)
+def create_graph_version(
+    kb_id: int,
+    request: Optional[Dict[str, Any]] = None,
+    db: Session = Depends(get_db)):
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == kb_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    description = None
+    if request and "description" in request:
+        description = request["description"]
+
+    try:
+        version = service_manager.graph_service.create_version_snapshot(db, kb_id, description)
+        return version
+    except Exception as e:
+        logger.error(f"Failed to create graph version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{kb_id}/versions/compare", response_model=schemas.GraphVersionDiff)
+def compare_graph_versions(
+    kb_id: int,
+    request: schemas.GraphVersionCompareRequest,
+    db: Session = Depends(get_db)):
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == kb_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    try:
+        diff = service_manager.graph_service.compare_versions(
+            db,
+            request.version_a_id,
+            request.version_b_id,
+            kb_id
+        )
+        return diff
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to compare graph versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/merge/preview", response_model=schemas.GraphMergePreview)
+def preview_merge_graphs(
+    request: schemas.GraphMergeRequest,
+    db: Session = Depends(get_db)):
+    try:
+        preview = service_manager.graph_service.preview_merge(
+            db,
+            request.source_kb_id,
+            request.target_kb_id
+        )
+        return preview
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to preview graph merge: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/merge/execute", response_model=schemas.GraphMergeResult)
+def execute_merge_graphs(
+    request: schemas.GraphMergeRequest,
+    db: Session = Depends(get_db)):
+    try:
+        result = service_manager.graph_service.execute_merge(
+            db,
+            request.source_kb_id,
+            request.target_kb_id,
+            request.resolutions
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to execute graph merge: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/query/advanced", response_model=schemas.GraphQLQueryResult)
+def execute_advanced_query(
+    request: schemas.GraphQLQueryRequest,
+    db: Session = Depends(get_db)):
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == request.knowledge_base_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    try:
+        result = service_manager.graph_query_service.execute_graphql_query(db, request)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to execute advanced query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{kb_id}/query/history", response_model=schemas.GraphQueryHistoryResponse)
+def get_query_history(
+    kb_id: int,
+    db: Session = Depends(get_db)):
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == kb_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    try:
+        history = service_manager.graph_query_service.get_query_history(db, kb_id)
+        return history
+    except Exception as e:
+        logger.error(f"Failed to get query history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{kb_id}/query/autocomplete", response_model=schemas.GraphQLAutocompleteResult)
+def get_query_autocomplete(
+    kb_id: int,
+    prefix: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db)):
+    kb = db.query(models.KnowledgeBase).filter(
+        models.KnowledgeBase.id == kb_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    try:
+        suggestions = service_manager.graph_query_service.get_autocomplete_suggestions(
+            db, kb_id, prefix, limit
+        )
+        return suggestions
+    except Exception as e:
+        logger.error(f"Failed to get autocomplete suggestions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/knowledge-bases/all", response_model=List[schemas.KnowledgeBase])
+def list_all_knowledge_bases(db: Session = Depends(get_db)):
+    try:
+        kbs = db.query(models.KnowledgeBase).all()
+        result = []
+        for kb in kbs:
+            doc_count = db.query(models.Document).filter(
+                models.Document.knowledge_base_id == kb.id
+            ).count()
+            result.append(schemas.KnowledgeBase(
+                id=kb.id,
+                name=kb.name,
+                description=kb.description,
+                document_count=doc_count,
+                created_at=kb.created_at,
+                updated_at=kb.updated_at
+            ))
+        return result
+    except Exception as e:
+        logger.error(f"Failed to list knowledge bases: {e}")
         raise HTTPException(status_code=500, detail=str(e))

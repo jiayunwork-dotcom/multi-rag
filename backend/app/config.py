@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     GRAPH_COMMUNITY_THRESHOLD: int = 5
     GRAPH_MAX_HOPS: int = 2
     GRAPH_MAX_RELATED_ENTITIES: int = 20
+    GRAPH_MERGE_CONFLICT_LOW_THRESHOLD: float = 0.6
+    GRAPH_MERGE_CONFLICT_HIGH_THRESHOLD: float = 0.8
+    GRAPH_MAX_QUERY_HISTORY: int = 10
+    GRAPH_AUTO_CREATE_VERSION: bool = True
 
     PROMPT_TEMPLATE: str = """基于以下参考资料回答用户问题，如果参考资料中没有相关信息请说明无法回答。
 参考资料:

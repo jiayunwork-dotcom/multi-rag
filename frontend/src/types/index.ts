@@ -462,3 +462,165 @@ export interface GraphCitation {
   entity_type: EntityType
   occurrence_count: number
 }
+
+export interface GraphVersionBase {
+  id: number
+  knowledge_base_id: number
+  version_number: number
+  entity_count: number
+  relation_count: number
+  connected_components: number
+  description?: string
+  created_at: string
+}
+
+export interface GraphVersionSnapshotEntity {
+  entity_id: number
+  name: string
+  entity_type: EntityType
+  description?: string
+  metadata?: Record<string, any>
+}
+
+export interface GraphVersionSnapshotRelation {
+  relation_id: number
+  source_entity_id: number
+  target_entity_id: number
+  source_entity_name: string
+  target_entity_name: string
+  relation_type: RelationType
+  description?: string
+  metadata?: Record<string, any>
+}
+
+export interface GraphVersion extends GraphVersionBase {
+  entities: GraphVersionSnapshotEntity[]
+  relations: GraphVersionSnapshotRelation[]
+}
+
+export interface GraphVersionDiff {
+  version_a_id: number
+  version_a_number: number
+  version_b_id: number
+  version_b_number: number
+  added_entities: GraphVersionSnapshotEntity[]
+  removed_entities: GraphVersionSnapshotEntity[]
+  added_relations: GraphVersionSnapshotRelation[]
+  removed_relations: GraphVersionSnapshotRelation[]
+  added_entity_count: number
+  removed_entity_count: number
+  added_relation_count: number
+  removed_relation_count: number
+}
+
+export interface GraphVersionCompareRequest {
+  knowledge_base_id: number
+  version_a_id?: number
+  version_b_id: number
+}
+
+export interface GraphMergeConflictEntity {
+  source_entity: GraphEntity
+  target_entity: GraphEntity
+  disambiguation_score: number
+  source_documents: string[]
+  context_snippets: string[]
+}
+
+export interface PendingConflict {
+  conflict_id: string
+  entity_a: {
+    entity_id: number
+    name: string
+    entity_type: string
+    source_kb_name: string
+    context_summary: string
+  }
+  entity_b: {
+    entity_id: number
+    name: string
+    entity_type: string
+    source_kb_name: string
+    context_summary: string
+  }
+  score: number
+  action?: 'merge' | 'keep' | undefined
+}
+
+export interface GraphMergePreview {
+  source_kb_id: number
+  target_kb_id: number
+  source_kb_name: string
+  target_kb_name: string
+  source_entity_count: number
+  source_relation_count: number
+  target_entity_count: number
+  target_relation_count: number
+  auto_merged_count: number
+  pending_count: number
+  pending_conflicts: PendingConflict[]
+}
+
+export interface GraphMergeResolve {
+  source_entity_id: number
+  target_entity_id: number
+  action: 'merge' | 'keep_separate'
+}
+
+export interface GraphMergeRequest {
+  source_kb_id: number
+  target_kb_id: number
+  resolutions?: GraphMergeResolve[]
+}
+
+export interface GraphMergeResult {
+  success: boolean
+  new_version_id?: number
+  merged_entity_count: number
+  merged_relation_count: number
+  conflict_resolved_count: number
+}
+
+export interface GraphQLQueryRequest {
+  knowledge_base_id: number
+  query: string
+  max_hops?: number
+}
+
+export interface GraphQLQueryResult {
+  query_type: 'find' | 'path' | 'natural_language'
+  parsed_query?: string
+  matched_entities: GraphEntity[]
+  matched_paths: Record<string, any>[]
+  path_edges: GraphRelation[]
+  highlight_node_ids: string[]
+  highlight_edge_ids: string[]
+  execution_time_ms: number
+}
+
+export interface GraphQLAutocompleteRequest {
+  knowledge_base_id: number
+  prefix: string
+  limit?: number
+}
+
+export interface GraphQLAutocompleteResult {
+  suggestions: string[]
+}
+
+export interface GraphQueryHistoryItem {
+  id: number
+  query: string
+  created_at: string
+}
+
+export interface GraphQueryHistoryResponse {
+  history: GraphQueryHistoryItem[]
+}
+
+export interface GraphHighlightState {
+  addedEntityIds: Set<string>
+  removedEntityIds: Set<string>
+  highlightNodeIds: Set<string>
+  highlightEdgeIds: Set<string>
+}

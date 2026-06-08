@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Float, Boolean
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Float, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -253,3 +253,63 @@ class KnowledgeBaseGraphStats(Base):
     build_error = Column(Text, nullable=True)
     last_built_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class GraphVersion(Base):
+    __tablename__ = "graph_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    version_number = Column(Integer, nullable=False, default=1)
+    entity_count = Column(Integer, default=0)
+    relation_count = Column(Integer, default=0)
+    connected_components = Column(Integer, default=0)
+    description = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    entity_snapshots = relationship("GraphVersionEntity", back_populates="version", cascade="all, delete-orphan")
+    relation_snapshots = relationship("GraphVersionRelation", back_populates="version", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('knowledge_base_id', 'version_number', name='_kb_version_uc'),
+    )
+
+
+class GraphVersionEntity(Base):
+    __tablename__ = "graph_version_entities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version_id = Column(Integer, ForeignKey("graph_versions.id"), nullable=False, index=True)
+    entity_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    entity_type = Column(String(50), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    metadata = Column(JSON, nullable=True)
+
+    version = relationship("GraphVersion", back_populates="entity_snapshots")
+
+
+class GraphVersionRelation(Base):
+    __tablename__ = "graph_version_relations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version_id = Column(Integer, ForeignKey("graph_versions.id"), nullable=False, index=True)
+    relation_id = Column(Integer, nullable=False, index=True)
+    source_entity_id = Column(Integer, nullable=False, index=True)
+    target_entity_id = Column(Integer, nullable=False, index=True)
+    source_entity_name = Column(String(255), nullable=False)
+    target_entity_name = Column(String(255), nullable=False)
+    relation_type = Column(String(50), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    metadata = Column(JSON, nullable=True)
+
+    version = relationship("GraphVersion", back_populates="relation_snapshots")
+
+
+class GraphQueryHistory(Base):
+    __tablename__ = "graph_query_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    query = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

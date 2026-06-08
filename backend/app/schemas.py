@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -617,3 +617,156 @@ class ChatGraphResponse(ChatResponse):
 
 
 GraphEntityDetail.model_rebuild()
+
+
+class GraphVersionSnapshotEntity(BaseModel):
+    entity_id: int
+    name: str
+    entity_type: EntityType
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GraphVersionSnapshotRelation(BaseModel):
+    relation_id: int
+    source_entity_id: int
+    target_entity_id: int
+    source_entity_name: str
+    target_entity_name: str
+    relation_type: RelationType
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GraphVersionBase(BaseModel):
+    knowledge_base_id: int
+    version_number: int
+    entity_count: int
+    relation_count: int
+    connected_components: int
+    description: Optional[str] = None
+    created_at: datetime
+
+
+class GraphVersion(GraphVersionBase):
+    id: int
+    entities: List[GraphVersionSnapshotEntity] = []
+    relations: List[GraphVersionSnapshotRelation] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GraphVersionDiff(BaseModel):
+    version_a_id: int
+    version_a_number: int
+    version_b_id: int
+    version_b_number: int
+    added_entities: List[GraphVersionSnapshotEntity] = []
+    removed_entities: List[GraphVersionSnapshotEntity] = []
+    added_relations: List[GraphVersionSnapshotRelation] = []
+    removed_relations: List[GraphVersionSnapshotRelation] = []
+    added_entity_count: int
+    removed_entity_count: int
+    added_relation_count: int
+    removed_relation_count: int
+
+
+class GraphVersionCompareRequest(BaseModel):
+    knowledge_base_id: int
+    version_a_id: Optional[int] = None
+    version_b_id: int
+
+
+class GraphMergeConflictEntity(BaseModel):
+    source_entity: GraphEntity
+    target_entity: GraphEntity
+    disambiguation_score: float
+    source_documents: List[str] = []
+    context_snippets: List[str] = []
+
+
+class PendingConflictEntity(BaseModel):
+    entity_id: int
+    name: str
+    entity_type: str
+    source_kb_name: str
+    context_summary: str
+
+
+class PendingConflict(BaseModel):
+    conflict_id: str
+    entity_a: PendingConflictEntity
+    entity_b: PendingConflictEntity
+    score: float
+    action: Optional[Literal["merge", "keep"]] = None
+
+
+class GraphMergePreview(BaseModel):
+    source_kb_id: int
+    target_kb_id: int
+    source_kb_name: str
+    target_kb_name: str
+    source_entity_count: int
+    source_relation_count: int
+    target_entity_count: int
+    target_relation_count: int
+    auto_merged_count: int
+    pending_count: int
+    pending_conflicts: List[PendingConflict] = []
+
+
+class GraphMergeResolve(BaseModel):
+    source_entity_id: int
+    target_entity_id: int
+    action: Literal["merge", "keep_separate"]
+
+
+class GraphMergeRequest(BaseModel):
+    source_kb_id: int
+    target_kb_id: int
+    resolutions: List[GraphMergeResolve] = []
+
+
+class GraphMergeResult(BaseModel):
+    success: bool
+    new_version_id: Optional[int] = None
+    merged_entity_count: int
+    merged_relation_count: int
+    conflict_resolved_count: int
+
+
+class GraphQLQueryRequest(BaseModel):
+    knowledge_base_id: int
+    query: str
+    max_hops: int = Field(default=3, ge=1, le=10)
+
+
+class GraphQLQueryResult(BaseModel):
+    query_type: Literal["find", "path", "natural_language"]
+    parsed_query: Optional[str] = None
+    matched_entities: List[GraphEntity] = []
+    matched_paths: List[Dict[str, Any]] = []
+    path_edges: List[GraphRelation] = []
+    highlight_node_ids: List[str] = []
+    highlight_edge_ids: List[str] = []
+    execution_time_ms: float = 0.0
+
+
+class GraphQLAutocompleteRequest(BaseModel):
+    knowledge_base_id: int
+    prefix: str
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class GraphQLAutocompleteResult(BaseModel):
+    suggestions: List[str] = []
+
+
+class GraphQueryHistoryItem(BaseModel):
+    id: int
+    query: str
+    created_at: datetime
+
+
+class GraphQueryHistoryResponse(BaseModel):
+    history: List[GraphQueryHistoryItem] = []

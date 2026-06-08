@@ -58,7 +58,13 @@
               v-for="node in visibleNodes"
               :key="node.id"
               :transform="`translate(${node.x}, ${node.y})`"
-              :class="['node', { selected: selectedNode?.id === node.id, highlighted: isNodeHighlighted(node), 'super-node': node.is_super_node }]"
+              :class="['node', { 
+                selected: selectedNode?.id === node.id, 
+                highlighted: isNodeHighlighted(node), 
+                'super-node': node.is_super_node,
+                'added-node': isNodeAdded(node),
+                'removed-node': isNodeRemoved(node)
+              }]"
               @mousedown.stop="onNodeMouseDown($event, node)"
               @click.stop="onNodeClick(node)"
             >
@@ -66,17 +72,18 @@
                 v-if="!node.is_super_node"
                 :d="getNodeShape(node)"
                 :fill="getNodeColor(node)"
-                :stroke="selectedNode?.id === node.id ? '#ff6b6b' : '#333'"
-                :stroke-width="selectedNode?.id === node.id ? 3 : 1.5"
+                :stroke="getNodeStroke(node)"
+                :stroke-width="getNodeStrokeWidth(node)"
+                :stroke-dasharray="isNodeRemoved(node) ? '5,5' : undefined"
                 :r="node.size"
               />
               <circle
                 v-else
                 :r="node.size"
                 :fill="getNodeColor(node)"
-                :stroke="selectedNode?.id === node.id ? '#ff6b6b' : '#333'"
-                :stroke-width="selectedNode?.id === node.id ? 3 : 1.5"
-                stroke-dasharray="5,5"
+                :stroke="getNodeStroke(node)"
+                :stroke-width="getNodeStrokeWidth(node)"
+                :stroke-dasharray="isNodeRemoved(node) ? '5,5' : '5,5'"
               />
               <text
                 :y="node.size + 15"
@@ -184,6 +191,10 @@ import GraphEditor from './GraphEditor.vue'
 
 const props = defineProps<{
   knowledgeBaseId: number
+  highlightAddedEntityIds?: Set<string>
+  highlightRemovedEntityIds?: Set<string>
+  highlightNodeIds?: Set<string>
+  highlightEdgeIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -280,6 +291,9 @@ const getNodeColor = (node: GraphNode) => {
 }
 
 const getEdgeColor = (edge: GraphEdge) => {
+  if (props.highlightEdgeIds?.has(edge.id)) {
+    return '#f59e0b'
+  }
   const colors: Record<string, string> = {
     belongs_to: '#ff6b6b',
     located_in: '#4ecdc4',
@@ -311,6 +325,9 @@ const toggleTypeFilter = (type: EntityType) => {
 }
 
 const isNodeHighlighted = (node: GraphNode) => {
+  if (props.highlightNodeIds?.has(node.id)) return true
+  if (props.highlightAddedEntityIds?.has(node.id)) return true
+  if (props.highlightRemovedEntityIds?.has(node.id)) return true
   if (!selectedNode.value) return false
   if (selectedNode.value.id === node.id) return true
   if (!graphData.value) return false
@@ -321,8 +338,30 @@ const isNodeHighlighted = (node: GraphNode) => {
 }
 
 const isEdgeHighlighted = (edge: GraphEdge) => {
+  if (props.highlightEdgeIds?.has(edge.id)) return true
   if (!selectedNode.value) return false
   return edge.source === selectedNode.value.id || edge.target === selectedNode.value.id
+}
+
+const isNodeAdded = (node: GraphNode) => {
+  return props.highlightAddedEntityIds?.has(node.id) || false
+}
+
+const isNodeRemoved = (node: GraphNode) => {
+  return props.highlightRemovedEntityIds?.has(node.id) || false
+}
+
+const getNodeStroke = (node: GraphNode) => {
+  if (selectedNode.value?.id === node.id) return '#ff6b6b'
+  if (isNodeAdded(node)) return '#22c55e'
+  if (isNodeRemoved(node)) return '#ef4444'
+  return '#333'
+}
+
+const getNodeStrokeWidth = (node: GraphNode) => {
+  if (selectedNode.value?.id === node.id) return 3
+  if (isNodeAdded(node) || isNodeRemoved(node)) return 2.5
+  return 1.5
 }
 
 const onNodeMouseDown = (event: MouseEvent, node: GraphNode) => {

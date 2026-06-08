@@ -662,6 +662,16 @@ class GraphService:
 
             self._update_kb_graph_stats(db, knowledge_base_id)
 
+            if settings.GRAPH_AUTO_CREATE_VERSION:
+                try:
+                    self.create_version_snapshot(
+                        db,
+                        knowledge_base_id,
+                        description=f"图谱构建完成 - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to create version snapshot: {e}")
+
         except Exception as e:
             stats.build_status = models.GraphBuildStatus.FAILED
             stats.build_error = str(e)
@@ -868,3 +878,557 @@ class GraphService:
         ])
 
         return "\n".join(lines)
+
+    def create_version_snapshot(
+        self,
+        db: Session,
+        knowledge_base_id: int,
+        description: Optional[str] = None
+    ) -> models.GraphVersion:
+        if not settings.GRAPH_AUTO_CREATE_VERSION:
+            logger.info("Auto version creation disabled")
+            return None
+
+        kb = db.query(models.KnowledgeBase).filter(
+            models.KnowledgeBase.id == knowledge_base_id
+        ).first()
+        if not kb:
+            raise ValueError(f"Knowledge base {knowledge_base_id} not found")
+
+        last_version = db.query(models.GraphVersion).filter(
+            models.GraphVersion.knowledge_base_id == knowledge_base_id
+        ).order_by(models.GraphVersion.version_number.desc()).first()
+
+        next_version = 1
+        if last_version:
+            next_version = last_version.version_number + 1
+
+        stats = service_manager.graph_query_service.get_graph_stats(db, knowledge_base_id)
+
+        entities = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == knowledge_base_id
+        ).all()
+
+        relations = db.query(models.GraphRelation).filter(
+            models.GraphRelation.knowledge_base_id == knowledge_base_id
+        ).all()
+
+        version = models.GraphVersion(
+            knowledge_base_id=knowledge_base_id,
+            version_number=next_version,
+            entity_count=len(entities),
+            relation_count=len(relations),
+            connected_components=stats.connected_components,
+            description=description or f"版本 {next_version} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        db.add(version)
+        db.flush()
+
+        for entity in entities:
+            snapshot = models.GraphVersionEntity(
+                version_id=version.id,
+                entity_id=entity.id,
+                name=entity.name,
+                entity_type=entity.entity_type,
+                description=entity.description,
+                metadata=entity.metadata
+            )
+            db.add(snapshot)
+
+        for relation in relations:
+            source = db.query(models.GraphEntity).filter(
+                models.GraphEntity.id == relation.source_entity_id
+            ).first()
+            target = db.query(models.GraphEntity).filter(
+                models.GraphEntity.id == relation.target_entity_id
+            ).first()
+
+            snapshot = models.GraphVersionRelation(
+                version_id=version.id,
+                relation_id=relation.id,
+                source_entity_id=relation.source_entity_id,
+                target_entity_id=relation.target_entity_id,
+                source_entity_name=source.name if source else "Unknown",
+                target_entity_name=target.name if target else "Unknown",
+                relation_type=relation.relation_type,
+                description=relation.description,
+                metadata=relation.metadata
+            )
+            db.add(snapshot)
+
+        db.commit()
+        db.refresh(version)
+
+        logger.info(f"Created graph version {next_version} for KB {knowledge_base_id}")
+        return version
+
+    def list_versions(
+        self,
+        db: Session,
+        knowledge_base_id: int,
+        skip: int = 0,
+        limit: int = 50
+    ) -> List[models.GraphVersion]:
+        versions = db.query(models.GraphVersion).filter(
+            models.GraphVersion.knowledge_base_id == knowledge_base_id
+        ).order_by(models.GraphVersion.created_at.desc()).offset(skip).limit(limit).all()
+        return versions
+
+    def get_version(
+        self,
+        db: Session,
+        version_id: int
+    ) -> Optional[models.GraphVersion]:
+        version = db.query(models.GraphVersion).filter(
+            models.GraphVersion.id == version_id
+        ).first()
+        return version
+
+    def get_version_with_snapshots(
+        self,
+        db: Session,
+        version_id: int
+    ) -> Optional[schemas.GraphVersion]:
+        version = db.query(models.GraphVersion).filter(
+            models.GraphVersion.id == version_id
+        ).first()
+        if not version:
+            return None
+
+        entity_snapshots = db.query(models.GraphVersionEntity).filter(
+            models.GraphVersionEntity.version_id == version_id
+        ).all()
+
+        relation_snapshots = db.query(models.GraphVersionRelation).filter(
+            models.GraphVersionRelation.version_id == version_id
+        ).all()
+
+        return schemas.GraphVersion(
+            id=version.id,
+            knowledge_base_id=version.knowledge_base_id,
+            version_number=version.version_number,
+            entity_count=version.entity_count,
+            relation_count=version.relation_count,
+            connected_components=version.connected_components,
+            description=version.description,
+            created_at=version.created_at,
+            entities=[
+                schemas.GraphVersionSnapshotEntity(
+                    entity_id=e.entity_id,
+                    name=e.name,
+                    entity_type=e.entity_type,
+                    description=e.description,
+                    metadata=e.metadata
+                ) for e in entity_snapshots
+            ],
+            relations=[
+                schemas.GraphVersionSnapshotRelation(
+                    relation_id=r.relation_id,
+                    source_entity_id=r.source_entity_id,
+                    target_entity_id=r.target_entity_id,
+                    source_entity_name=r.source_entity_name,
+                    target_entity_name=r.target_entity_name,
+                    relation_type=r.relation_type,
+                    description=r.description,
+                    metadata=r.metadata
+                ) for r in relation_snapshots
+            ]
+        )
+
+    def compare_versions(
+        self,
+        db: Session,
+        version_a_id: Optional[int],
+        version_b_id: int,
+        knowledge_base_id: int
+    ) -> schemas.GraphVersionDiff:
+        version_b = self.get_version_with_snapshots(db, version_b_id)
+        if not version_b:
+            raise ValueError(f"Version {version_b_id} not found")
+
+        if version_a_id:
+            version_a = self.get_version_with_snapshots(db, version_a_id)
+            if not version_a:
+                raise ValueError(f"Version {version_a_id} not found")
+        else:
+            current_entities = db.query(models.GraphEntity).filter(
+                models.GraphEntity.knowledge_base_id == knowledge_base_id
+            ).all()
+            current_relations = db.query(models.GraphRelation).filter(
+                models.GraphRelation.knowledge_base_id == knowledge_base_id
+            ).all()
+
+            version_a = schemas.GraphVersion(
+                id=0,
+                knowledge_base_id=knowledge_base_id,
+                version_number=0,
+                entity_count=len(current_entities),
+                relation_count=len(current_relations),
+                connected_components=0,
+                description="当前版本",
+                created_at=datetime.utcnow(),
+                entities=[
+                    schemas.GraphVersionSnapshotEntity(
+                        entity_id=e.id,
+                        name=e.name,
+                        entity_type=e.entity_type,
+                        description=e.description,
+                        metadata=e.metadata
+                    ) for e in current_entities
+                ],
+                relations=[]
+            )
+            for rel in current_relations:
+                source = db.query(models.GraphEntity).filter(
+                    models.GraphEntity.id == rel.source_entity_id
+                ).first()
+                target = db.query(models.GraphEntity).filter(
+                    models.GraphEntity.id == rel.target_entity_id
+                ).first()
+                version_a.relations.append(
+                    schemas.GraphVersionSnapshotRelation(
+                        relation_id=rel.id,
+                        source_entity_id=rel.source_entity_id,
+                        target_entity_id=rel.target_entity_id,
+                        source_entity_name=source.name if source else "Unknown",
+                        target_entity_name=target.name if target else "Unknown",
+                        relation_type=rel.relation_type,
+                        description=rel.description,
+                        metadata=rel.metadata
+                    )
+                )
+
+        a_entity_keys = {(e.name, e.entity_type) for e in version_a.entities}
+        b_entity_keys = {(e.name, e.entity_type) for e in version_b.entities}
+
+        added_entity_keys = b_entity_keys - a_entity_keys
+        removed_entity_keys = a_entity_keys - b_entity_keys
+
+        added_entities = [e for e in version_b.entities if (e.name, e.entity_type) in added_entity_keys]
+        removed_entities = [e for e in version_a.entities if (e.name, e.entity_type) in removed_entity_keys]
+
+        a_rel_keys = {(r.source_entity_name, r.target_entity_name, r.relation_type) for r in version_a.relations}
+        b_rel_keys = {(r.source_entity_name, r.target_entity_name, r.relation_type) for r in version_b.relations}
+
+        added_rel_keys = b_rel_keys - a_rel_keys
+        removed_rel_keys = a_rel_keys - b_rel_keys
+
+        added_relations = [r for r in version_b.relations if (r.source_entity_name, r.target_entity_name, r.relation_type) in added_rel_keys]
+        removed_relations = [r for r in version_a.relations if (r.source_entity_name, r.target_entity_name, r.relation_type) in removed_rel_keys]
+
+        return schemas.GraphVersionDiff(
+            version_a_id=version_a.id,
+            version_a_number=version_a.version_number,
+            version_b_id=version_b.id,
+            version_b_number=version_b.version_number,
+            added_entities=added_entities,
+            removed_entities=removed_entities,
+            added_relations=added_relations,
+            removed_relations=removed_relations,
+            added_entity_count=len(added_entities),
+            removed_entity_count=len(removed_entities),
+            added_relation_count=len(added_relations),
+            removed_relation_count=len(removed_relations)
+        )
+
+    def preview_merge(
+        self,
+        db: Session,
+        source_kb_id: int,
+        target_kb_id: int
+    ) -> schemas.GraphMergePreview:
+        source_kb = db.query(models.KnowledgeBase).filter(
+            models.KnowledgeBase.id == source_kb_id
+        ).first()
+        target_kb = db.query(models.KnowledgeBase).filter(
+            models.KnowledgeBase.id == target_kb_id
+        ).first()
+
+        if not source_kb or not target_kb:
+            raise ValueError("Source or target knowledge base not found")
+
+        source_entities = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == source_kb_id
+        ).all()
+
+        target_entities = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == target_kb_id
+        ).all()
+
+        source_relations = db.query(models.GraphRelation).filter(
+            models.GraphRelation.knowledge_base_id == source_kb_id
+        ).all()
+
+        target_relations = db.query(models.GraphRelation).filter(
+            models.GraphRelation.knowledge_base_id == target_kb_id
+        ).all()
+
+        pending_conflicts: List[schemas.PendingConflict] = []
+        auto_merged_count = 0
+
+        low_threshold = settings.GRAPH_MERGE_CONFLICT_LOW_THRESHOLD
+        high_threshold = settings.GRAPH_MERGE_CONFLICT_HIGH_THRESHOLD
+
+        for source_entity in source_entities:
+            for target_entity in target_entities:
+                if source_entity.name == target_entity.name and source_entity.entity_type == target_entity.entity_type:
+                    score = 1.0
+                elif source_entity.entity_type != target_entity.entity_type:
+                    continue
+                else:
+                    extracted_entity = schemas.ExtractedEntity(
+                        name=source_entity.name,
+                        entity_type=source_entity.entity_type,
+                        context_snippet=source_entity.description or ""
+                    )
+                    matched = self._disambiguate_entity(
+                        db, extracted_entity, target_kb_id, [target_entity]
+                    )
+                    if matched and matched.id == target_entity.id:
+                        score = 1.0
+                    else:
+                        if source_entity.embedding and target_entity.embedding:
+                            source_emb = np.array(source_entity.embedding)
+                            target_emb = np.array(target_entity.embedding)
+                            score = cosine_similarity(
+                                source_emb.reshape(1, -1),
+                                target_emb.reshape(1, -1)
+                            )[0][0]
+                            name_sim = self._name_similarity(source_entity.name, target_entity.name)
+                            score = score * 0.7 + name_sim * 0.3
+                        else:
+                            score = self._name_similarity(source_entity.name, target_entity.name)
+
+                if score >= high_threshold:
+                    auto_merged_count += 1
+                elif low_threshold <= score < high_threshold:
+                    source_docs = db.query(
+                        func.distinct(models.EntityOccurrence.document_id)
+                    ).filter(
+                        models.EntityOccurrence.entity_id == source_entity.id
+                    ).all()
+                    source_doc_titles = []
+                    for (doc_id,) in source_docs:
+                        doc = db.query(models.Document).filter(
+                            models.Document.id == doc_id
+                        ).first()
+                        if doc:
+                            source_doc_titles.append(doc.title)
+
+                    source_occurrences = db.query(models.EntityOccurrence).filter(
+                        models.EntityOccurrence.entity_id == source_entity.id
+                    ).order_by(
+                        models.EntityOccurrence.confidence.desc()
+                    ).limit(3).all()
+                    context_snippets = [
+                        occ.context_snippet for occ in source_occurrences
+                    ]
+                    context_summary = source_entity.description or (
+                        context_snippets[0] if context_snippets else ""
+                    )
+
+                    target_occurrences = db.query(models.EntityOccurrence).filter(
+                        models.EntityOccurrence.entity_id == target_entity.id
+                    ).order_by(
+                        models.EntityOccurrence.confidence.desc()
+                    ).limit(3).all()
+                    target_context_snippets = [
+                        occ.context_snippet for occ in target_occurrences
+                    ]
+                    target_context_summary = target_entity.description or (
+                        target_context_snippets[0] if target_context_snippets else ""
+                    )
+
+                    conflict_id = f"conflict_{source_entity.id}_{target_entity.id}"
+                    pending_conflicts.append(schemas.PendingConflict(
+                        conflict_id=conflict_id,
+                        entity_a=schemas.PendingConflictEntity(
+                            entity_id=source_entity.id,
+                            name=source_entity.name,
+                            entity_type=source_entity.entity_type,
+                            source_kb_name=source_kb.name,
+                            context_summary=context_summary
+                        ),
+                        entity_b=schemas.PendingConflictEntity(
+                            entity_id=target_entity.id,
+                            name=target_entity.name,
+                            entity_type=target_entity.entity_type,
+                            source_kb_name=target_kb.name,
+                            context_summary=target_context_summary
+                        ),
+                        score=float(score)
+                    ))
+
+        return schemas.GraphMergePreview(
+            source_kb_id=source_kb_id,
+            target_kb_id=target_kb_id,
+            source_kb_name=source_kb.name,
+            target_kb_name=target_kb.name,
+            source_entity_count=len(source_entities),
+            source_relation_count=len(source_relations),
+            target_entity_count=len(target_entities),
+            target_relation_count=len(target_relations),
+            auto_merged_count=auto_merged_count,
+            pending_count=len(pending_conflicts),
+            pending_conflicts=pending_conflicts
+        )
+
+    def execute_merge(
+        self,
+        db: Session,
+        source_kb_id: int,
+        target_kb_id: int,
+        resolutions: List[schemas.GraphMergeResolve]
+    ) -> schemas.GraphMergeResult:
+        source_entities = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == source_kb_id
+        ).all()
+
+        source_relations = db.query(models.GraphRelation).filter(
+            models.GraphRelation.knowledge_base_id == source_kb_id
+        ).all()
+
+        target_entities = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == target_kb_id
+        ).all()
+
+        entity_id_map: Dict[int, int] = {}
+        merged_entity_count = 0
+        merged_relation_count = 0
+
+        resolution_map = {
+            (r.source_entity_id, r.target_entity_id): r.action
+            for r in resolutions
+        }
+
+        high_threshold = settings.GRAPH_MERGE_CONFLICT_HIGH_THRESHOLD
+
+        for source_entity in source_entities:
+            matched_target = None
+            for target_entity in target_entities:
+                if source_entity.entity_type != target_entity.entity_type:
+                    continue
+
+                action = resolution_map.get((source_entity.id, target_entity.id))
+
+                if action == "keep_separate":
+                    continue
+
+                if action == "merge":
+                    matched_target = target_entity
+                    break
+
+                if source_entity.name == target_entity.name and source_entity.entity_type == target_entity.entity_type:
+                    matched_target = target_entity
+                    break
+
+                extracted_entity = schemas.ExtractedEntity(
+                    name=source_entity.name,
+                    entity_type=source_entity.entity_type,
+                    context_snippet=source_entity.description or ""
+                )
+                disambiguated = self._disambiguate_entity(
+                    db, extracted_entity, target_kb_id, [target_entity]
+                )
+                if disambiguated and disambiguated.id == target_entity.id:
+                    matched_target = target_entity
+                    break
+
+                if source_entity.embedding and target_entity.embedding:
+                    source_emb = np.array(source_entity.embedding)
+                    target_emb = np.array(target_entity.embedding)
+                    score = cosine_similarity(
+                        source_emb.reshape(1, -1),
+                        target_emb.reshape(1, -1)
+                    )[0][0]
+                    name_sim = self._name_similarity(source_entity.name, target_entity.name)
+                    combined_score = score * 0.7 + name_sim * 0.3
+                    if combined_score >= high_threshold:
+                        matched_target = target_entity
+                        break
+
+            if matched_target:
+                entity_id_map[source_entity.id] = matched_target.id
+                merged_entity_count += 1
+            else:
+                new_entity = models.GraphEntity(
+                    knowledge_base_id=target_kb_id,
+                    name=source_entity.name,
+                    entity_type=source_entity.entity_type,
+                    description=source_entity.description,
+                    embedding=source_entity.embedding,
+                    metadata=source_entity.metadata
+                )
+                db.add(new_entity)
+                db.flush()
+                db.refresh(new_entity)
+                self._create_neo4j_entity(new_entity)
+                entity_id_map[source_entity.id] = new_entity.id
+                merged_entity_count += 1
+
+        source_entity_ids = {e.id for e in source_entities}
+        for source_relation in source_relations:
+            new_source_id = entity_id_map.get(source_relation.source_entity_id)
+            new_target_id = entity_id_map.get(source_relation.target_entity_id)
+
+            if not new_source_id or not new_target_id:
+                continue
+
+            if new_source_id == new_target_id:
+                continue
+
+            existing = db.query(models.GraphRelation).filter(
+                models.GraphRelation.knowledge_base_id == target_kb_id,
+                models.GraphRelation.source_entity_id == new_source_id,
+                models.GraphRelation.target_entity_id == new_target_id,
+                models.GraphRelation.relation_type == source_relation.relation_type
+            ).first()
+
+            if existing:
+                existing.frequency += source_relation.frequency
+                self._update_neo4j_relation_frequency(existing)
+            else:
+                new_source = db.query(models.GraphEntity).filter(
+                    models.GraphEntity.id == new_source_id
+                ).first()
+                new_target = db.query(models.GraphEntity).filter(
+                    models.GraphEntity.id == new_target_id
+                ).first()
+
+                new_relation = models.GraphRelation(
+                    knowledge_base_id=target_kb_id,
+                    source_entity_id=new_source_id,
+                    target_entity_id=new_target_id,
+                    relation_type=source_relation.relation_type,
+                    description=source_relation.description,
+                    frequency=source_relation.frequency,
+                    metadata=source_relation.metadata
+                )
+                db.add(new_relation)
+                db.flush()
+                db.refresh(new_relation)
+                self._create_neo4j_relation(new_source, new_target, new_relation)
+                merged_relation_count += 1
+
+        db.commit()
+
+        new_version = None
+        if settings.GRAPH_AUTO_CREATE_VERSION:
+            try:
+                new_version = self.create_version_snapshot(
+                    db,
+                    target_kb_id,
+                    description=f"合并图谱 - 从 {source_kb_id} 到 {target_kb_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create version after merge: {e}")
+
+        return schemas.GraphMergeResult(
+            success=True,
+            new_version_id=new_version.id if new_version else None,
+            merged_entity_count=merged_entity_count,
+            merged_relation_count=merged_relation_count,
+            conflict_resolved_count=len(resolutions)
+        )
+
+from .pipeline_service import service_manager

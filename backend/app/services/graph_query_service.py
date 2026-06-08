@@ -933,3 +933,408 @@ class GraphQueryService:
 
         db.delete(relation)
         db.commit()
+
+    def _parse_graph_query(
+        self,
+        query: str,
+        knowledge_base_id: int,
+        db: Session
+    ) -> Tuple[str, Dict[str, Any]]:
+        query_lower = query.strip().lower()
+
+        find_match = re.match(r'find\s+entity\s+where\s+(.+)', query_lower)
+        if find_match:
+            conditions = find_match.group(1).strip()
+            filters = {}
+
+            type_match = re.search(r'type\s*=\s*(\w+)', conditions)
+            if type_match:
+                filters['entity_type'] = type_match.group(1)
+
+            name_match = re.search(r'name\s+contains\s*"([^"]+)"', conditions)
+            if name_match:
+                filters['name_contains'] = name_match.group(1)
+
+            name_eq_match = re.search(r'name\s*=\s*"([^"]+)"', conditions)
+            if name_eq_match:
+                filters['name'] = name_eq_match.group(1)
+
+            return 'find', filters
+
+        path_match = re.match(r'path\s+from\s*"([^"]+)"\s+to\s*"([^"]+)"(?:\s+max_hops\s+(\d+))?', query_lower)
+        if path_match:
+            from_entity = path_match.group(1)
+            to_entity = path_match.group(2)
+            max_hops = int(path_match.group(3)) if path_match.group(3) else 3
+
+            return 'path', {
+                'from': from_entity,
+                'to': to_entity,
+                'max_hops': max_hops
+            }
+
+        return 'natural_language', {'query': query}
+
+    def _execute_find_query(
+        self,
+        db: Session,
+        knowledge_base_id: int,
+        filters: Dict[str, Any]
+    ) -> Tuple[List[schemas.GraphEntity], List[str], List[str]]:
+        query = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == knowledge_base_id
+        )
+
+        if 'entity_type' in filters:
+            query = query.filter(models.GraphEntity.entity_type == filters['entity_type'])
+
+        if 'name' in filters:
+            query = query.filter(models.GraphEntity.name == filters['name'])
+        elif 'name_contains' in filters:
+            query = query.filter(models.GraphEntity.name.ilike(f"%{filters['name_contains']}%"))
+
+        entities = query.limit(100).all()
+
+        result = []
+        highlight_node_ids = []
+        for entity in entities:
+            occurrence_count = db.query(models.EntityOccurrence).filter(
+                models.EntityOccurrence.entity_id == entity.id
+            ).count()
+            document_count = db.query(func.count(func.distinct(models.EntityOccurrence.document_id))).filter(
+                models.EntityOccurrence.entity_id == entity.id
+            ).scalar() or 0
+            degree = len(entity.source_relations) + len(entity.target_relations)
+
+            result.append(schemas.GraphEntity(
+                id=entity.id,
+                knowledge_base_id=entity.knowledge_base_id,
+                name=entity.name,
+                entity_type=entity.entity_type,
+                description=entity.description,
+                neo4j_id=entity.neo4j_id,
+                occurrence_count=occurrence_count,
+                document_count=document_count,
+                degree=degree,
+                related_chunks=[],
+                metadata=entity.metadata,
+                created_at=entity.created_at,
+                updated_at=entity.updated_at
+            ))
+            highlight_node_ids.append(str(entity.id))
+
+        return result, highlight_node_ids, []
+
+    def _execute_path_query(
+        self,
+        db: Session,
+        knowledge_base_id: int,
+        params: Dict[str, Any],
+        max_hops: int
+    ) -> Tuple[List[schemas.GraphEntity], List[Dict[str, Any]], List[schemas.GraphRelation], List[str], List[str]]:
+        from_name = params['from']
+        to_name = params['to']
+        actual_max_hops = params.get('max_hops', max_hops)
+
+        from_entity = self.find_entity_by_name(db, knowledge_base_id, from_name)
+        to_entity = self.find_entity_by_name(db, knowledge_base_id, to_name)
+
+        if not from_entity or not to_entity:
+            return [], [], [], [], []
+
+        G = self._build_networkx_graph(db, knowledge_base_id)
+
+        paths = self._find_all_paths(
+            G,
+            str(from_entity.id),
+            str(to_entity.id),
+            max_hops=actual_max_hops,
+            max_paths=10
+        )
+
+        matched_entities = {}
+        matched_relations = {}
+        highlight_node_ids = set()
+        highlight_edge_ids = set()
+
+        highlight_node_ids.add(str(from_entity.id))
+        highlight_node_ids.add(str(to_entity.id))
+
+        matched_paths = []
+        for path in paths:
+            path_data = []
+            for i, node_id in enumerate(path):
+                node_data = G.nodes[node_id]
+                if node_id not in matched_entities:
+                    entity = db.query(models.GraphEntity).filter(
+                        models.GraphEntity.id == int(node_id)
+                    ).first()
+                    if entity:
+                        occurrence_count = db.query(models.EntityOccurrence).filter(
+                            models.EntityOccurrence.entity_id == entity.id
+                        ).count()
+                        document_count = db.query(func.count(func.distinct(models.EntityOccurrence.document_id))).filter(
+                            models.EntityOccurrence.entity_id == entity.id
+                        ).scalar() or 0
+                        degree = len(entity.source_relations) + len(entity.target_relations)
+                        matched_entities[node_id] = schemas.GraphEntity(
+                            id=entity.id,
+                            knowledge_base_id=entity.knowledge_base_id,
+                            name=entity.name,
+                            entity_type=entity.entity_type,
+                            description=entity.description,
+                            neo4j_id=entity.neo4j_id,
+                            occurrence_count=occurrence_count,
+                            document_count=document_count,
+                            degree=degree,
+                            related_chunks=[],
+                            metadata=entity.metadata,
+                            created_at=entity.created_at,
+                            updated_at=entity.updated_at
+                        )
+                highlight_node_ids.add(node_id)
+
+                path_data.append({
+                    'type': 'entity',
+                    'entity_id': node_id,
+                    'name': node_data['name'],
+                    'entity_type': node_data['entity_type']
+                })
+
+                if i < len(path) - 1:
+                    next_id = path[i + 1]
+                    edge_key = None
+                    if G.has_edge(node_id, next_id):
+                        edge_key = f"{node_id}-{next_id}"
+                        edge_data = G[node_id][next_id]
+                    elif G.has_edge(next_id, node_id):
+                        edge_key = f"{next_id}-{node_id}"
+                        edge_data = G[next_id][node_id]
+
+                    if edge_key and edge_key not in matched_relations:
+                        rel = db.query(models.GraphRelation).filter(
+                            ((models.GraphRelation.source_entity_id == int(node_id)) &
+                             (models.GraphRelation.target_entity_id == int(next_id))) |
+                            ((models.GraphRelation.source_entity_id == int(next_id)) &
+                             (models.GraphRelation.target_entity_id == int(node_id)))
+                        ).first()
+                        if rel:
+                            source = db.query(models.GraphEntity).filter(
+                                models.GraphEntity.id == rel.source_entity_id
+                            ).first()
+                            target = db.query(models.GraphEntity).filter(
+                                models.GraphEntity.id == rel.target_entity_id
+                            ).first()
+                            matched_relations[edge_key] = schemas.GraphRelation(
+                                id=rel.id,
+                                knowledge_base_id=rel.knowledge_base_id,
+                                source_entity_id=rel.source_entity_id,
+                                target_entity_id=rel.target_entity_id,
+                                relation_type=rel.relation_type,
+                                description=rel.description,
+                                neo4j_id=rel.neo4j_id,
+                                frequency=rel.frequency,
+                                source_entity_name=source.name if source else "",
+                                target_entity_name=target.name if target else "",
+                                source_entity_type=source.entity_type if source else None,
+                                target_entity_type=target.entity_type if target else None,
+                                created_at=rel.created_at,
+                                updated_at=rel.updated_at
+                            )
+                    if edge_key:
+                        highlight_edge_ids.add(edge_key)
+
+                    path_data.append({
+                        'type': 'relation',
+                        'relation': edge_data['relation_type'] if edge_data else 'related_to',
+                        'frequency': edge_data['frequency'] if edge_data else 1
+                    })
+
+            matched_paths.append({
+                'path': path_data,
+                'length': len(path) - 1
+            })
+
+        return list(matched_entities.values()), matched_paths, list(matched_relations.values()), list(highlight_node_ids), list(highlight_edge_ids)
+
+    def _find_all_paths(
+        self,
+        G: nx.DiGraph,
+        start: str,
+        end: str,
+        max_hops: int = 3,
+        max_paths: int = 10
+    ) -> List[List[str]]:
+        paths = []
+        visited = set()
+
+        def dfs(current: str, path: List[str], depth: int):
+            if len(paths) >= max_paths:
+                return
+            if current == end and len(path) > 1:
+                paths.append(path.copy())
+                return
+            if depth >= max_hops:
+                return
+
+            neighbors = list(G.neighbors(current)) + list(G.predecessors(current))
+            neighbors = sorted(neighbors, key=lambda n: G.degree(n), reverse=True)
+
+            for neighbor in neighbors:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    path.append(neighbor)
+                    dfs(neighbor, path, depth + 1)
+                    path.pop()
+                    visited.remove(neighbor)
+
+        visited.add(start)
+        dfs(start, [start], 0)
+        return paths[:max_paths]
+
+    def execute_graphql_query(
+        self,
+        db: Session,
+        request: schemas.GraphQLQueryRequest
+    ) -> schemas.GraphQLQueryResult:
+        import time
+        start_time = time.time()
+
+        query_type, params = self._parse_graph_query(
+            request.query,
+            request.knowledge_base_id,
+            db
+        )
+
+        matched_entities = []
+        matched_paths = []
+        path_edges = []
+        highlight_node_ids = []
+        highlight_edge_ids = []
+        parsed_query = None
+
+        if query_type == 'find':
+            matched_entities, highlight_node_ids, highlight_edge_ids = self._execute_find_query(
+                db, request.knowledge_base_id, params
+            )
+            parsed_query = f"FIND entity WHERE {params}"
+
+        elif query_type == 'path':
+            matched_entities, matched_paths, path_edges, highlight_node_ids, highlight_edge_ids = self._execute_path_query(
+                db, request.knowledge_base_id, params, request.max_hops
+            )
+            parsed_query = f"PATH FROM \"{params['from']}\" TO \"{params['to']}\" MAX_HOPS {params.get('max_hops', request.max_hops)}"
+
+        else:
+            extracted_entities = self.extract_query_entities(
+                request.query, request.knowledge_base_id, db
+            )
+            if extracted_entities:
+                matched_entities, highlight_node_ids, _ = self._execute_find_query(
+                    db,
+                    request.knowledge_base_id,
+                    {'name_contains': extracted_entities[0]}
+                )
+                if len(extracted_entities) >= 2:
+                    _, paths, edges, path_nodes, path_edges_list = self._execute_path_query(
+                        db,
+                        request.knowledge_base_id,
+                        {'from': extracted_entities[0], 'to': extracted_entities[1]},
+                        request.max_hops
+                    )
+                    matched_paths = paths
+                    path_edges = edges
+                    highlight_node_ids = list(set(highlight_node_ids) | set(path_nodes))
+                    highlight_edge_ids = path_edges_list
+
+            parsed_query = f"Natural language: {request.query}"
+
+        execution_time = (time.time() - start_time) * 1000
+
+        self._save_query_history(db, request.knowledge_base_id, request.query)
+
+        return schemas.GraphQLQueryResult(
+            query_type=query_type,
+            parsed_query=parsed_query,
+            matched_entities=matched_entities,
+            matched_paths=matched_paths,
+            path_edges=path_edges,
+            highlight_node_ids=highlight_node_ids,
+            highlight_edge_ids=highlight_edge_ids,
+            execution_time_ms=execution_time
+        )
+
+    def _save_query_history(
+        self,
+        db: Session,
+        knowledge_base_id: int,
+        query: str
+    ):
+        existing = db.query(models.GraphQueryHistory).filter(
+            models.GraphQueryHistory.knowledge_base_id == knowledge_base_id,
+            models.GraphQueryHistory.query == query
+        ).first()
+
+        if existing:
+            existing.created_at = func.now()
+            db.commit()
+            return
+
+        history = models.GraphQueryHistory(
+            knowledge_base_id=knowledge_base_id,
+            query=query
+        )
+        db.add(history)
+        db.commit()
+
+        max_history = settings.GRAPH_MAX_QUERY_HISTORY
+        count = db.query(models.GraphQueryHistory).filter(
+            models.GraphQueryHistory.knowledge_base_id == knowledge_base_id
+        ).count()
+
+        if count > max_history:
+            old_entries = db.query(models.GraphQueryHistory).filter(
+                models.GraphQueryHistory.knowledge_base_id == knowledge_base_id
+            ).order_by(models.GraphQueryHistory.created_at.asc()).limit(count - max_history).all()
+            for entry in old_entries:
+                db.delete(entry)
+            db.commit()
+
+    def get_query_history(
+        self,
+        db: Session,
+        knowledge_base_id: int
+    ) -> schemas.GraphQueryHistoryResponse:
+        history = db.query(models.GraphQueryHistory).filter(
+            models.GraphQueryHistory.knowledge_base_id == knowledge_base_id
+        ).order_by(models.GraphQueryHistory.created_at.desc()).limit(settings.GRAPH_MAX_QUERY_HISTORY).all()
+
+        return schemas.GraphQueryHistoryResponse(
+            history=[
+                schemas.GraphQueryHistoryItem(
+                    id=h.id,
+                    query=h.query,
+                    created_at=h.created_at
+                ) for h in history
+            ]
+        )
+
+    def get_autocomplete_suggestions(
+        self,
+        db: Session,
+        knowledge_base_id: int,
+        prefix: str,
+        limit: int = 10
+    ) -> schemas.GraphQLAutocompleteResult:
+        if not prefix:
+            return schemas.GraphQLAutocompleteResult(suggestions=[])
+
+        entities = db.query(models.GraphEntity).filter(
+            models.GraphEntity.knowledge_base_id == knowledge_base_id,
+            func.lower(models.GraphEntity.name).like(f"{prefix.lower()}%")
+        ).order_by(
+            func.length(models.GraphEntity.name)
+        ).limit(limit).all()
+
+        suggestions = [e.name for e in entities]
+        return schemas.GraphQLAutocompleteResult(suggestions=suggestions)
