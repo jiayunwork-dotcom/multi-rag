@@ -252,6 +252,13 @@ class DocumentPipeline:
             return
 
         chunk_ids = [c.id for c in document.chunks]
+        embedding_ids = [c.embedding_id for c in document.chunks if c.embedding_id]
+
+        if embedding_ids:
+            self.vector_store.delete_chunks_by_embedding_ids(
+                document.knowledge_base_id,
+                embedding_ids
+            )
 
         self.vector_store.delete_chunks_by_document(
             document.knowledge_base_id,
@@ -263,7 +270,7 @@ class DocumentPipeline:
             chunk_ids
         )
 
-        logger.info(f"Deleted index data for document {document_id}")
+        logger.info(f"Deleted index data for document {document_id}: {len(embedding_ids)} embeddings, {len(chunk_ids)} chunks")
 
 
 class ServiceManager:
@@ -311,6 +318,14 @@ class ServiceManager:
         )
 
         self.bm25_index = BM25Index()
+
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            self.bm25_index.set_db_session(db)
+            self.bm25_index.load_all_from_db()
+        finally:
+            db.close()
 
         self.retrieval_service = RetrievalService(
             self.vector_store,

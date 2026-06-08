@@ -1,5 +1,6 @@
 import jieba
 import math
+import json
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 import logging
@@ -12,6 +13,118 @@ class BM25Index:
         self.k1 = k1
         self.b = b
         self.knowledge_base_indices = {}
+        self.db_session = None
+
+    def set_db_session(self, db_session):
+        self.db_session = db_session
+
+    def load_from_db(self, knowledge_base_id: int):
+        from .. import models
+
+        if not self.db_session:
+            logger.warning("No DB session available for loading BM25 index")
+            return
+
+        db_indices = self.db_session.query(models.BM25Index).filter(
+            models.BM25Index.knowledge_base_id == knowledge_base_id
+        ).all()
+
+        if not db_indices:
+            return
+
+        doc_ids = []
+        doc_tokens = []
+        doc_lengths = []
+        tf = []
+        doc_freq = defaultdict(int)
+
+        for idx in db_indices:
+            chunk_ids = idx.chunk_ids
+            for chunk_id in chunk_ids:
+                if chunk_id not in doc_ids:
+                    doc_ids.append(chunk_id)
+
+        for doc_id in doc_ids:
+            chunk = self.db_session.query(models.Chunk).filter(
+                models.Chunk.id == doc_id
+            ).first()
+            if chunk:
+                tokens = self.tokenize(chunk.content)
+                doc_tokens.append(tokens)
+                doc_lengths.append(len(tokens))
+
+                term_freq = defaultdict(int)
+                for token in tokens:
+                    term_freq[token] += 1
+                tf.append(term_freq)
+
+                unique_tokens = set(tokens)
+                for token in unique_tokens:
+                    doc_freq[token] += 1
+
+        N = len(doc_ids)
+        avgdl = sum(doc_lengths) / N if N else 0
+
+        idf = {}
+        for token, freq in doc_freq.items():
+            idf[token] = math.log((N - freq + 0.5) / (freq + 0.5) + 1)
+
+        self.knowledge_base_indices[knowledge_base_id] = {
+            "doc_ids": doc_ids,
+            "doc_tokens": doc_tokens,
+            "doc_lengths": doc_lengths,
+            "avgdl": avgdl,
+            "tf": tf,
+            "idf": idf,
+            "doc_freq": doc_freq,
+            "N": N,
+        }
+
+        logger.info(f"Loaded BM25 index from DB for KB {knowledge_base_id}: {N} documents")
+
+    def load_all_from_db(self):
+        from .. import models
+
+        if not self.db_session:
+            logger.warning("No DB session available for loading BM25 indices")
+            return
+
+        kb_ids = self.db_session.query(models.BM25Index.knowledge_base_id).distinct().all()
+        for (kb_id,) in kb_ids:
+            self.load_from_db(kb_id)
+
+    def _save_to_db(self, knowledge_base_id: int):
+        from .. import models
+
+        if not self.db_session:
+            return
+
+        if knowledge_base_id not in self.knowledge_base_indices:
+            return
+
+        index = self.knowledge_base_indices[knowledge_base_id]
+
+        self.db_session.query(models.BM25Index).filter(
+            models.BM25Index.knowledge_base_id == knowledge_base_id
+        ).delete()
+
+        keyword_inverted = defaultdict(list)
+        for i, doc_id in enumerate(index["doc_ids"]):
+            for token in index["doc_tokens"][i]:
+                if doc_id not in keyword_inverted[token]:
+                    keyword_inverted[token].append(doc_id)
+
+        for keyword, chunk_ids in keyword_inverted.items():
+            db_idx = models.BM25Index(
+                knowledge_base_id=knowledge_base_id,
+                keyword=keyword,
+                chunk_ids=chunk_ids,
+                doc_freq=len(chunk_ids)
+            )
+            self.db_session.add(db_idx)
+
+        self.db_session.commit()
+        logger.info(f"Saved BM25 index to DB for KB {knowledge_base_id}")
 
     def _get_stopwords(self) -> set:
         return {
@@ -73,6 +186,7 @@ class BM25Index:
             "N": N,
         }
 
+        self._save_to_db(knowledge_base_id)
         logger.info(f"BM25 index built for KB {knowledge_base_id}: {N} documents, {len(doc_freq)} unique terms")
 
     def search(
@@ -83,8 +197,11 @@ class BM25Index:
         filter_chunk_ids: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
         if knowledge_base_id not in self.knowledge_base_indices:
-            logger.warning(f"No BM25 index for KB {knowledge_base_id}")
-            return []
+            logger.info(f"BM25 index not in memory for KB {knowledge_base_id}, trying to load from DB")
+            self.load_from_db(knowledge_base_id)
+            if knowledge_base_id not in self.knowledge_base_indices:
+                logger.warning(f"No BM25 index for KB {knowledge_base_id}")
+                return []
 
         index = self.knowledge_base_indices[knowledge_base_id]
         query_tokens = self.tokenize(query)
@@ -157,6 +274,7 @@ class BM25Index:
         for token, freq in index["doc_freq"].items():
             index["idf"][token] = math.log((index["N"] - freq + 0.5) / (freq + 0.5) + 1)
 
+        self._save_to_db(knowledge_base_id)
         logger.info(f"Added {len(new_chunks)} chunks to BM25 index for KB {knowledge_base_id}")
 
     def delete_chunks(self, knowledge_base_id: int, chunk_ids: List[int]):
@@ -208,9 +326,19 @@ class BM25Index:
             "N": N,
         }
 
+        self._save_to_db(knowledge_base_id)
         logger.info(f"Deleted {len(chunk_ids)} chunks from BM25 index for KB {knowledge_base_id}")
 
     def clear_index(self, knowledge_base_id: int):
+        from .. import models
+
         if knowledge_base_id in self.knowledge_base_indices:
             del self.knowledge_base_indices[knowledge_base_id]
-            logger.info(f"BM25 index cleared for KB {knowledge_base_id}")
+
+        if self.db_session:
+            self.db_session.query(models.BM25Index).filter(
+                models.BM25Index.knowledge_base_id == knowledge_base_id
+            ).delete()
+            self.db_session.commit()
+
+        logger.info(f"BM25 index cleared for KB {knowledge_base_id}")

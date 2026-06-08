@@ -17,8 +17,10 @@ class ConversationService:
         max_rounds: Optional[int] = None
     ) -> List[Dict[str, str]]:
         from .. import models
+        from sqlalchemy import func
 
         max_rounds = max_rounds or self.max_history_rounds
+        max_messages = max_rounds * 2
 
         conversation = self.db.query(models.Conversation).filter(
             models.Conversation.id == conversation_id
@@ -27,13 +29,17 @@ class ConversationService:
         if not conversation:
             return []
 
+        total_messages = self.db.query(func.count(models.Message.id)).filter(
+            models.Message.conversation_id == conversation_id
+        ).scalar()
+
         messages = self.db.query(models.Message).filter(
             models.Message.conversation_id == conversation_id
-        ).order_by(models.Message.created_at.desc()).limit(max_rounds * 2).all()
+        ).order_by(models.Message.created_at.desc()).limit(max_messages).all()
 
         messages = list(reversed(messages))
 
-        if len(messages) >= max_rounds * 2:
+        if total_messages > max_messages:
             if conversation.history_summary:
                 return self._build_history_with_summary(
                     messages,
@@ -41,9 +47,8 @@ class ConversationService:
                     max_rounds
                 )
             else:
-                recent_messages = messages[-(max_rounds * 2):]
                 history = []
-                for msg in recent_messages:
+                for msg in messages:
                     history.append({
                         "role": msg.role,
                         "content": msg.content

@@ -78,10 +78,10 @@ class VectorStore:
             ids.append(chunk_id)
             documents.append(chunk["content"])
             metadatas.append({
-                "chunk_id": chunk.get("id", 0),
-                "document_id": chunk.get("document_id", 0),
-                "chunk_index": chunk.get("chunk_index", 0),
-                "page_number": chunk.get("page_number", 0) or 0,
+                "chunk_id": str(chunk.get("id", 0)),
+                "document_id": str(chunk.get("document_id", 0)),
+                "chunk_index": str(chunk.get("chunk_index", 0)),
+                "page_number": str(chunk.get("page_number", 0) or 0),
                 "content_type": content_type,
             })
             embedding_list.append(embedding.tolist())
@@ -116,7 +116,7 @@ class VectorStore:
 
         where = None
         if filter_document_ids:
-            where = {"document_id": {"$in": filter_document_ids}}
+            where = {"document_id": {"$in": [str(doc_id) for doc_id in filter_document_ids]}}
 
         try:
             results = collection.query(
@@ -134,10 +134,10 @@ class VectorStore:
                     similarity = 1.0 - distance if distance else 0.0
 
                     formatted_results.append({
-                        "chunk_id": metadata.get("chunk_id"),
-                        "document_id": metadata.get("document_id"),
-                        "chunk_index": metadata.get("chunk_index"),
-                        "page_number": metadata.get("page_number"),
+                        "chunk_id": int(metadata.get("chunk_id", 0)),
+                        "document_id": int(metadata.get("document_id", 0)),
+                        "chunk_index": int(metadata.get("chunk_index", 0)),
+                        "page_number": int(metadata.get("page_number", 0)),
                         "content": results["documents"][0][i],
                         "semantic_score": float(similarity),
                     })
@@ -147,14 +147,31 @@ class VectorStore:
             logger.error(f"Search failed: {e}")
             return []
 
+    def delete_chunks_by_embedding_ids(self, knowledge_base_id: int, embedding_ids: List[str], content_type: str = "text"):
+        collection_name = self._get_collection_name(knowledge_base_id, content_type)
+        try:
+            collection = self.client.get_collection(name=collection_name)
+            collection.delete(ids=embedding_ids)
+            logger.info(f"Deleted {len(embedding_ids)} chunks by embedding_ids from ChromaDB")
+        except Exception as e:
+            logger.warning(f"Failed to delete chunks by embedding_ids: {e}")
+
     def delete_chunks_by_document(self, knowledge_base_id: int, document_id: int, content_type: str = "text"):
         collection_name = self._get_collection_name(knowledge_base_id, content_type)
         try:
             collection = self.client.get_collection(name=collection_name)
-            collection.delete(
-                where={"document_id": document_id}
+
+            all_results = collection.get(
+                where={"document_id": {"$eq": str(document_id)}},
+                include=["metadatas"]
             )
-            logger.info(f"Deleted chunks for document {document_id}")
+
+            if all_results and all_results.get("ids"):
+                chunk_ids_to_delete = all_results["ids"]
+                collection.delete(ids=chunk_ids_to_delete)
+                logger.info(f"Deleted {len(chunk_ids_to_delete)} chunks for document {document_id} from ChromaDB")
+            else:
+                logger.info(f"No chunks found for document {document_id} in ChromaDB")
         except Exception as e:
             logger.warning(f"Failed to delete chunks for document {document_id}: {e}")
 
