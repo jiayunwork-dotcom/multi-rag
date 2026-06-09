@@ -397,7 +397,7 @@ class GraphQueryService:
             document_count=document_count,
             degree=degree,
             related_chunks=related_chunks,
-            metadata=entity.metadata,
+            metadata=entity.entity_metadata,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             occurrences=occ_list,
@@ -612,7 +612,7 @@ class GraphQueryService:
                     document_count=document_count,
                     degree=degree,
                     related_chunks=[],
-                    metadata=entity.metadata,
+                    metadata=entity.entity_metadata,
                     created_at=entity.created_at,
                     updated_at=entity.updated_at
                 ))
@@ -716,7 +716,7 @@ class GraphQueryService:
             name=data.name,
             entity_type=data.entity_type,
             description=data.description,
-            metadata=data.metadata
+            entity_metadata=data.metadata
         )
         db.add(new_entity)
         db.flush()
@@ -736,7 +736,7 @@ class GraphQueryService:
             document_count=0,
             degree=0,
             related_chunks=[],
-            metadata=new_entity.metadata,
+            metadata=new_entity.entity_metadata,
             created_at=new_entity.created_at,
             updated_at=new_entity.updated_at
         )
@@ -799,7 +799,7 @@ class GraphQueryService:
             document_count=document_count,
             degree=degree,
             related_chunks=[],
-            metadata=entity.metadata,
+            metadata=entity.entity_metadata,
             created_at=entity.created_at,
             updated_at=entity.updated_at
         )
@@ -845,7 +845,7 @@ class GraphQueryService:
             relation_type=data.relation_type,
             description=data.description,
             frequency=1,
-            metadata=data.metadata
+            relation_metadata=data.metadata
         )
         db.add(new_relation)
         db.flush()
@@ -1017,7 +1017,7 @@ class GraphQueryService:
                 document_count=document_count,
                 degree=degree,
                 related_chunks=[],
-                metadata=entity.metadata,
+                metadata=entity.entity_metadata,
                 created_at=entity.created_at,
                 updated_at=entity.updated_at
             ))
@@ -1089,7 +1089,7 @@ class GraphQueryService:
                             document_count=document_count,
                             degree=degree,
                             related_chunks=[],
-                            metadata=entity.metadata,
+                            metadata=entity.entity_metadata,
                             created_at=entity.created_at,
                             updated_at=entity.updated_at
                         )

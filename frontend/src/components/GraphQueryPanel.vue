@@ -402,6 +402,9 @@ function highlightResults() {
   }
 
   emit('highlight-changed', { nodeIds, edgeIds })
+  if (queryResult.value) {
+    queryResult.value.highlight = true
+  }
 }
 
 function highlightPath(path: Record<string, any>) {

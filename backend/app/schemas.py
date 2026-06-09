@@ -622,7 +622,7 @@ GraphEntityDetail.model_rebuild()
 class GraphVersionSnapshotEntity(BaseModel):
     entity_id: int
     name: str
-    entity_type: EntityType
+    entity_type: str
     description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
@@ -633,7 +633,7 @@ class GraphVersionSnapshotRelation(BaseModel):
     target_entity_id: int
     source_entity_name: str
     target_entity_name: str
-    relation_type: RelationType
+    relation_type: str
     description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 

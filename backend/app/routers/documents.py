@@ -253,7 +253,7 @@ def get_chunk(doc_id: int, chunk_index: int, db: Session = Depends(get_db)):
         page_number=chunk.page_number,
         token_count=chunk.token_count,
         keywords=chunk.keywords,
-        metadata=chunk.metadata,
+        metadata=chunk.chunk_metadata,
         created_at=chunk.created_at,
         document_title=doc.title if doc else None,
     )

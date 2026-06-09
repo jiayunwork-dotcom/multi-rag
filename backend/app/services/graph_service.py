@@ -932,7 +932,7 @@ class GraphService:
                 name=entity.name,
                 entity_type=entity.entity_type,
                 description=entity.description,
-                metadata=entity.metadata
+                snapshot_entity_metadata=entity.entity_metadata
             )
             db.add(snapshot)
 
@@ -953,7 +953,7 @@ class GraphService:
                 target_entity_name=target.name if target else "Unknown",
                 relation_type=relation.relation_type,
                 description=relation.description,
-                metadata=relation.metadata
+                snapshot_relation_metadata=relation.relation_metadata
             )
             db.add(snapshot)
 
@@ -1019,7 +1019,7 @@ class GraphService:
                     name=e.name,
                     entity_type=e.entity_type,
                     description=e.description,
-                    metadata=e.metadata
+                    metadata=e.snapshot_entity_metadata
                 ) for e in entity_snapshots
             ],
             relations=[
@@ -1031,7 +1031,7 @@ class GraphService:
                     target_entity_name=r.target_entity_name,
                     relation_type=r.relation_type,
                     description=r.description,
-                    metadata=r.metadata
+                    metadata=r.snapshot_relation_metadata
                 ) for r in relation_snapshots
             ]
         )
@@ -1074,7 +1074,7 @@ class GraphService:
                         name=e.name,
                         entity_type=e.entity_type,
                         description=e.description,
-                        metadata=e.metadata
+                        metadata=e.entity_metadata
                     ) for e in current_entities
                 ],
                 relations=[]
@@ -1095,7 +1095,7 @@ class GraphService:
                         target_entity_name=target.name if target else "Unknown",
                         relation_type=rel.relation_type,
                         description=rel.description,
-                        metadata=rel.metadata
+                        metadata=rel.relation_metadata
                     )
                 )
 
@@ -1108,16 +1108,18 @@ class GraphService:
         added_entities = [e for e in version_b.entities if (e.name, e.entity_type) in added_entity_keys]
         removed_entities = [e for e in version_a.entities if (e.name, e.entity_type) in removed_entity_keys]
 
-        a_rel_keys = {(r.source_entity_id, r.target_entity_id, r.relation_type) for r in version_a.relations}
-        b_rel_keys = {(r.source_entity_id, r.target_entity_id, r.relation_type) for r in version_b.relations}
+        a_rel_keys = {(r.source_entity_id, r.target_entity_id, str(r.relation_type)) for r in version_a.relations}
+        b_rel_keys = {(r.source_entity_id, r.target_entity_id, str(r.relation_type)) for r in version_b.relations}
 
         added_rel_keys = b_rel_keys - a_rel_keys
         removed_rel_keys = a_rel_keys - b_rel_keys
 
-        added_relations = [r for r in version_b.relations if (r.source_entity_id, r.target_entity_id, r.relation_type) in added_rel_keys]
-        removed_relations = [r for r in version_a.relations if (r.source_entity_id, r.target_entity_id, r.relation_type) in removed_rel_keys]
+        added_relations = [r for r in version_b.relations if (r.source_entity_id, r.target_entity_id, str(r.relation_type)) in added_rel_keys]
+        removed_relations = [r for r in version_a.relations if (r.source_entity_id, r.target_entity_id, str(r.relation_type)) in removed_rel_keys]
 
-        logger.info(f"Version compare: version_a has {len(version_a.relations)} relations, version_b has {len(version_b.relations)} relations")
+        logger.info(f"Version compare: version_a(v{version_a.version_number}) has {len(version_a.entities)} entities, {len(version_a.relations)} relations")
+        logger.info(f"Version compare: version_b(v{version_b.version_number}) has {len(version_b.entities)} entities, {len(version_b.relations)} relations")
+        logger.info(f"Version compare: a_rel_keys={a_rel_keys}, b_rel_keys={b_rel_keys}")
         logger.info(f"Version compare: added_rels={len(added_relations)}, removed_rels={len(removed_relations)}")
 
         return schemas.GraphVersionDiff(
@@ -1361,7 +1363,7 @@ class GraphService:
                     entity_type=source_entity.entity_type,
                     description=source_entity.description,
                     embedding=source_entity.embedding,
-                    metadata=source_entity.metadata
+                    entity_metadata=source_entity.entity_metadata
                 )
                 db.add(new_entity)
                 db.flush()
@@ -1406,7 +1408,7 @@ class GraphService:
                     relation_type=source_relation.relation_type,
                     description=source_relation.description,
                     frequency=source_relation.frequency,
-                    metadata=source_relation.metadata
+                    relation_metadata=source_relation.relation_metadata
                 )
                 db.add(new_relation)
                 db.flush()

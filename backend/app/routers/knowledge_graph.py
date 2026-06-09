@@ -110,7 +110,7 @@ def list_entities(
             document_count=document_count,
             degree=degree,
             related_chunks=[],
-            metadata=entity.metadata,
+            metadata=entity.entity_metadata,
             created_at=entity.created_at,
             updated_at=entity.updated_at
         ))

@@ -178,7 +178,7 @@ class GraphEntity(Base):
     description = Column(Text, nullable=True)
     neo4j_id = Column(String(100), nullable=True, index=True)
     embedding = Column(JSON, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    entity_metadata = Column('metadata', JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -198,7 +198,7 @@ class GraphRelation(Base):
     description = Column(Text, nullable=True)
     neo4j_id = Column(String(100), nullable=True, index=True)
     frequency = Column(Integer, default=1)
-    metadata = Column(JSON, nullable=True)
+    relation_metadata = Column('metadata', JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -284,7 +284,7 @@ class GraphVersionEntity(Base):
     name = Column(String(255), nullable=False, index=True)
     entity_type = Column(String(50), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    snapshot_entity_metadata = Column('metadata', JSON, nullable=True)
 
     version = relationship("GraphVersion", back_populates="entity_snapshots")
 
@@ -301,7 +301,7 @@ class GraphVersionRelation(Base):
     target_entity_name = Column(String(255), nullable=False)
     relation_type = Column(String(50), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    snapshot_relation_metadata = Column('metadata', JSON, nullable=True)
 
     version = relationship("GraphVersion", back_populates="relation_snapshots")
 
