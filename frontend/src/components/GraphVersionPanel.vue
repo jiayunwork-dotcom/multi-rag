@@ -150,6 +150,32 @@
             </div>
           </div>
         </div>
+        <div v-if="versionDiff.added_relations.length > 0" class="diff-section">
+          <h5>新增关系</h5>
+          <div class="diff-list">
+            <div
+              v-for="rel in versionDiff.added_relations"
+              :key="rel.relation_id"
+              class="diff-item added"
+            >
+              <span class="entity-name">{{ rel.source_entity_name }} → {{ rel.target_entity_name }}</span>
+              <el-tag size="small" type="warning">{{ getRelationTypeLabel(rel.relation_type) }}</el-tag>
+            </div>
+          </div>
+        </div>
+        <div v-if="versionDiff.removed_relations.length > 0" class="diff-section">
+          <h5>删除关系</h5>
+          <div class="diff-list">
+            <div
+              v-for="rel in versionDiff.removed_relations"
+              :key="rel.relation_id"
+              class="diff-item removed"
+            >
+              <span class="entity-name">{{ rel.source_entity_name }} → {{ rel.target_entity_name }}</span>
+              <el-tag size="small" type="warning">{{ getRelationTypeLabel(rel.relation_type) }}</el-tag>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -286,6 +312,20 @@ function formatDate(dateStr: string) {
 function getEntityTypeLabel(type: string) {
   const t = entityTypes.find(t => t.value === type)
   return t?.label || type
+}
+
+const relationTypes = [
+  { value: 'belongs_to', label: '属于' },
+  { value: 'located_in', label: '位于' },
+  { value: 'created_by', label: '由...创建' },
+  { value: 'uses', label: '使用' },
+  { value: 'depends_on', label: '依赖' },
+  { value: 'contains', label: '包含' }
+]
+
+function getRelationTypeLabel(type: string) {
+  const r = relationTypes.find(r => r.value === type)
+  return r?.label || type
 }
 
 function getEntityTagType(type: string) {

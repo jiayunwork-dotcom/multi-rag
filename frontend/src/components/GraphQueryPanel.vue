@@ -104,11 +104,15 @@
       <div v-if="queryResult" class="results-content">
         <div class="results-header">
           <div class="results-stats">
-            <span v-if="queryResult.result_type === 'entities'" class="stat">
-              找到 <strong>{{ queryResult.entities?.length || 0 }}</strong> 个实体
+            <span v-if="queryResult.query_type === 'find'" class="stat">
+              找到 <strong>{{ queryResult.matched_entities?.length || 0 }}</strong> 个实体
             </span>
-            <span v-else-if="queryResult.result_type === 'paths'" class="stat">
-              找到 <strong>{{ queryResult.paths?.length || 0 }}</strong> 条路径
+            <span v-else-if="queryResult.query_type === 'path'" class="stat">
+              找到 <strong>{{ queryResult.matched_paths?.length || 0 }}</strong> 条路径
+            </span>
+            <span v-else-if="queryResult.query_type === 'natural_language'" class="stat">
+              找到 <strong>{{ queryResult.matched_entities?.length || 0 }}</strong> 个实体,
+              <strong>{{ queryResult.matched_paths?.length || 0 }}</strong> 条路径
             </span>
             <span v-if="queryResult.parsed_query" class="parsed-query">
               解析为: <code>{{ queryResult.parsed_query }}</code>
@@ -118,15 +122,15 @@
             <el-button
               size="small"
               @click="highlightResults"
-              :disabled="!queryResult.entities && !queryResult.paths"
+              :disabled="!queryResult.matched_entities?.length && !queryResult.matched_paths?.length"
             >
               在图谱中高亮
             </el-button>
           </div>
         </div>
 
-        <div v-if="queryResult.result_type === 'entities' && queryResult.entities" class="results-table">
-          <el-table :data="queryResult.entities" stripe size="small" max-height="400">
+        <div v-if="queryResult.query_type === 'find' && queryResult.matched_entities" class="results-table">
+          <el-table :data="queryResult.matched_entities" stripe size="small" max-height="400">
             <el-table-column prop="name" label="实体名称" min-width="150">
               <template #default="{ row }">
                 <span class="entity-name" @click="selectEntity(row)">{{ row.name }}</span>
@@ -143,9 +147,9 @@
           </el-table>
         </div>
 
-        <div v-else-if="queryResult.result_type === 'paths' && queryResult.paths" class="paths-results">
+        <div v-else-if="queryResult.query_type === 'path' && queryResult.matched_paths" class="paths-results">
           <div
-            v-for="(path, pathIndex) in queryResult.paths"
+            v-for="(path, pathIndex) in queryResult.matched_paths"
             :key="pathIndex"
             class="path-item"
           >
@@ -159,9 +163,53 @@
               <template v-for="(node, index) in path.entities" :key="index">
                 <span class="path-node" @click="selectEntity(node)">{{ node.name }}</span>
                 <span v-if="index < path.relations.length" class="path-relation">
-                  → {{ path.relations[index].relation_type }} →
+                  → {{ getRelationTypeLabel(path.relations[index].relation_type) }} →
                 </span>
               </template>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="queryResult.query_type === 'natural_language'" class="mixed-results">
+          <div v-if="queryResult.matched_entities && queryResult.matched_entities.length > 0" class="results-table">
+            <h5>相关实体</h5>
+            <el-table :data="queryResult.matched_entities" stripe size="small" max-height="300">
+              <el-table-column prop="name" label="实体名称" min-width="150">
+                <template #default="{ row }">
+                  <span class="entity-name" @click="selectEntity(row)">{{ row.name }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="entity_type" label="类型" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="getEntityTagType(row.entity_type)">
+                    {{ getEntityTypeLabel(row.entity_type) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="description" label="描述" min-width="200" />
+            </el-table>
+          </div>
+          <div v-if="queryResult.matched_paths && queryResult.matched_paths.length > 0" class="paths-results">
+            <h5>相关路径</h5>
+            <div
+              v-for="(path, pathIndex) in queryResult.matched_paths"
+              :key="pathIndex"
+              class="path-item"
+            >
+              <div class="path-header">
+                <span>路径 {{ pathIndex + 1 }} ({{ path.hops }} 跳)</span>
+                <el-button size="small" text @click="highlightPath(path)">
+                  高亮路径
+                </el-button>
+              </div>
+              <div class="path-visual">
+                <template v-for="(node, index) in path.entities" :key="index">
+                  <span class="path-node" @click="selectEntity(node)">{{ node.name }}</span>
+                  <span v-if="index < path.relations.length" class="path-relation">
+                    → {{ getRelationTypeLabel(path.relations[index].relation_type) }} →
+                  </span>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -193,7 +241,7 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { graphApi } from '@/api'
-import type { GraphQLQueryResult, GraphQLAutocompleteResult, GraphEntity, GraphPath } from '@/types'
+import type { GraphQLQueryResult, GraphQLAutocompleteResult, GraphEntity } from '@/types'
 
 const props = defineProps<{
   knowledgeBaseId: number
@@ -210,7 +258,7 @@ const emit = defineEmits<{
 const queryText = ref('')
 const queryMode = ref<'auto' | 'natural' | 'structured'>('auto')
 const queryLoading = ref(false)
-const queryResult = ref<GraphQLQueryResult | null>(null)
+const queryResult = ref<(GraphQLQueryResult & { highlight?: boolean }) | null>(null)
 const queryError = ref<string | null>(null)
 const showHelp = ref(false)
 const showHistory = ref(false)
@@ -338,27 +386,34 @@ function highlightResults() {
   const nodeIds = new Set<string>()
   const edgeIds = new Set<string>()
 
-  if (queryResult.value.entities) {
-    queryResult.value.entities.forEach(e => nodeIds.add(e.id.toString()))
+  if (queryResult.value.matched_entities) {
+    queryResult.value.matched_entities.forEach(e => nodeIds.add(e.id.toString()))
   }
 
-  if (queryResult.value.paths) {
-    queryResult.value.paths.forEach(path => {
-      path.entities.forEach(e => nodeIds.add(e.id.toString()))
-      path.relations.forEach(r => edgeIds.add(r.id.toString()))
+  if (queryResult.value.matched_paths) {
+    queryResult.value.matched_paths.forEach(path => {
+      if (path.entities) {
+        path.entities.forEach((e: any) => nodeIds.add(e.id.toString()))
+      }
+      if (path.relations) {
+        path.relations.forEach((r: any) => edgeIds.add(r.id.toString()))
+      }
     })
   }
 
   emit('highlight-changed', { nodeIds, edgeIds })
-  queryResult.value.highlight = true
 }
 
-function highlightPath(path: GraphPath) {
+function highlightPath(path: Record<string, any>) {
   const nodeIds = new Set<string>()
   const edgeIds = new Set<string>()
 
-  path.entities.forEach(e => nodeIds.add(e.id.toString()))
-  path.relations.forEach(r => edgeIds.add(r.id.toString()))
+  if (path.entities) {
+    path.entities.forEach((e: any) => nodeIds.add(e.id.toString()))
+  }
+  if (path.relations) {
+    path.relations.forEach((r: any) => edgeIds.add(r.id.toString()))
+  }
 
   emit('highlight-changed', { nodeIds, edgeIds })
 }
@@ -380,6 +435,20 @@ function formatDate(dateStr: string) {
 function getEntityTypeLabel(type: string) {
   const t = entityTypes.find(t => t.value === type)
   return t?.label || type
+}
+
+const relationTypes = [
+  { value: 'belongs_to', label: '属于' },
+  { value: 'located_in', label: '位于' },
+  { value: 'created_by', label: '由...创建' },
+  { value: 'uses', label: '使用' },
+  { value: 'depends_on', label: '依赖' },
+  { value: 'contains', label: '包含' }
+]
+
+function getRelationTypeLabel(type: string) {
+  const r = relationTypes.find(r => r.value === type)
+  return r?.label || type
 }
 
 function getEntityTagType(type: string) {

@@ -1062,7 +1062,8 @@ class GraphQueryService:
 
         matched_paths = []
         for path in paths:
-            path_data = []
+            path_entities = []
+            path_relations = []
             for i, node_id in enumerate(path):
                 node_data = G.nodes[node_id]
                 if node_id not in matched_entities:
@@ -1094,9 +1095,8 @@ class GraphQueryService:
                         )
                 highlight_node_ids.add(node_id)
 
-                path_data.append({
-                    'type': 'entity',
-                    'entity_id': node_id,
+                path_entities.append({
+                    'id': int(node_id),
                     'name': node_data['name'],
                     'entity_type': node_data['entity_type']
                 })
@@ -1104,6 +1104,7 @@ class GraphQueryService:
                 if i < len(path) - 1:
                     next_id = path[i + 1]
                     edge_key = None
+                    edge_data = None
                     if G.has_edge(node_id, next_id):
                         edge_key = f"{node_id}-{next_id}"
                         edge_data = G[node_id][next_id]
@@ -1144,15 +1145,20 @@ class GraphQueryService:
                     if edge_key:
                         highlight_edge_ids.add(edge_key)
 
-                    path_data.append({
-                        'type': 'relation',
-                        'relation': edge_data['relation_type'] if edge_data else 'related_to',
-                        'frequency': edge_data['frequency'] if edge_data else 1
+                    rel_type = edge_data['relation_type'] if edge_data else 'related_to'
+                    path_relations.append({
+                        'id': edge_key or f"rel_{i}",
+                        'source_entity_id': int(node_id),
+                        'target_entity_id': int(next_id),
+                        'relation_type': rel_type,
+                        'source_entity_name': node_data['name'],
+                        'target_entity_name': G.nodes[next_id]['name'] if next_id in G.nodes else ''
                     })
 
             matched_paths.append({
-                'path': path_data,
-                'length': len(path) - 1
+                'entities': path_entities,
+                'relations': path_relations,
+                'hops': len(path) - 1
             })
 
         return list(matched_entities.values()), matched_paths, list(matched_relations.values()), list(highlight_node_ids), list(highlight_edge_ids)

@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from neo4j import GraphDatabase, Driver, Session as Neo4jSession
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -1107,14 +1108,17 @@ class GraphService:
         added_entities = [e for e in version_b.entities if (e.name, e.entity_type) in added_entity_keys]
         removed_entities = [e for e in version_a.entities if (e.name, e.entity_type) in removed_entity_keys]
 
-        a_rel_keys = {(r.source_entity_name, r.target_entity_name, r.relation_type) for r in version_a.relations}
-        b_rel_keys = {(r.source_entity_name, r.target_entity_name, r.relation_type) for r in version_b.relations}
+        a_rel_keys = {(r.source_entity_id, r.target_entity_id, r.relation_type) for r in version_a.relations}
+        b_rel_keys = {(r.source_entity_id, r.target_entity_id, r.relation_type) for r in version_b.relations}
 
         added_rel_keys = b_rel_keys - a_rel_keys
         removed_rel_keys = a_rel_keys - b_rel_keys
 
-        added_relations = [r for r in version_b.relations if (r.source_entity_name, r.target_entity_name, r.relation_type) in added_rel_keys]
-        removed_relations = [r for r in version_a.relations if (r.source_entity_name, r.target_entity_name, r.relation_type) in removed_rel_keys]
+        added_relations = [r for r in version_b.relations if (r.source_entity_id, r.target_entity_id, r.relation_type) in added_rel_keys]
+        removed_relations = [r for r in version_a.relations if (r.source_entity_id, r.target_entity_id, r.relation_type) in removed_rel_keys]
+
+        logger.info(f"Version compare: version_a has {len(version_a.relations)} relations, version_b has {len(version_b.relations)} relations")
+        logger.info(f"Version compare: added_rels={len(added_relations)}, removed_rels={len(removed_relations)}")
 
         return schemas.GraphVersionDiff(
             version_a_id=version_a.id,
